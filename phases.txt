@@ -1,0 +1,336 @@
+================================================================
+  SCHOOL MANAGEMENT PORTAL — DEVELOPMENT PHASES
+  Project: EduPortal (Demo)
+  Prepared for: Scheeza Ahmad | Team S26CS044
+  Last updated: 2026-08-28
+  Mode: Demo school | Free tier | End-to-end
+================================================================
+
+----------------------------------------------------------------
+PHASE 0 — PROJECT SETUP & ARCHITECTURE
+Duration: Week 1
+----------------------------------------------------------------
+
+Goals:
+  - Initialize repo (frontend + backend in one GitHub repo)
+  - Set up version control, branching strategy (main / dev / feature/*)
+  - Configure environment variables (.env + .env.example)
+  - Set up linting and formatting (ESLint, Prettier)
+  - Design and finalize database schema (PostgreSQL + ERD)
+  - Set up GitHub Actions for CI (lint + type-check on PR)
+  - Configure Cloudinary account (free tier — file uploads)
+  - Configure Supabase project (free tier — PostgreSQL)
+
+Free Tier Setup:
+  - Supabase   → free PostgreSQL (500MB)
+  - Cloudinary → free file storage (25GB)
+  - Vercel     → free frontend hosting
+  - Railway    → free backend ($5 credit — enough for demo)
+  - Resend     → free email (3,000/month)
+
+Deliverables:
+  - GitHub repo live with README and folder structure
+  - DB schema finalized (Prisma schema.prisma written)
+  - .env.example committed with all variable names
+  - Dev environment running locally
+  - Supabase + Cloudinary accounts connected
+
+----------------------------------------------------------------
+PHASE 1 — AUTHENTICATION & SUPER ADMIN
+Duration: Weeks 2–4
+Status: CURRENT
+----------------------------------------------------------------
+
+Security Measures (applied in this phase, used throughout):
+  - JWT access token (15min) stored in JS memory only
+  - JWT refresh token (7d) in httpOnly + Secure + SameSite cookie
+  - Bcrypt password hashing (rounds = 12)
+  - express-rate-limit: max 5 login attempts per IP per 15 min
+  - Helmet.js: secure HTTP headers (XSS, clickjacking, MIME)
+  - Zod: input validation on every endpoint
+  - CORS: only allow frontend URL
+  - Soft delete: never hard delete any record
+  - Audit log: every sensitive action recorded automatically
+  - Never return password hash in any API response
+
+Module: Auth System
+  - JWT login / logout
+  - Refresh token rotation
+  - Password reset via email (OTP, 10-minute expiry)
+  - RBAC middleware (role-based route protection)
+  - Super Admin account seeded via script (not self-registerable)
+
+Module: Super Admin Dashboard
+  Features:
+    - Create / edit / disable / soft-delete schools
+    - Assign School Admin to a school
+    - Platform-wide stats dashboard
+        (total schools, total users by role, submissions, storage)
+    - Enable / disable features per school (feature flags)
+        (parent portal, AI features, SMS, Urdu toggle)
+    - Full audit log viewer
+        (filterable by school / user / action / date, CSV export)
+    - Manual database backup trigger (Supabase export → Cloudinary)
+    - User impersonation (with automatic audit log entry)
+    - Suspicious login alert (3 failed attempts → email to super admin)
+
+  Automations (cron jobs):
+    - weeklyBackup.ts     → Every Sunday 00:00 — DB backup
+    - monthlyReport.ts    → 1st of month 08:00 — health report PDF emailed
+    - storageWarning.ts   → Daily check — alert if storage > 80%
+    - suspiciousLogin.ts  → Real-time — 3 failed logins trigger email
+
+  NOTE: School inactivity alert deliberately excluded.
+
+Deliverables:
+  - /api/auth/* endpoints complete and tested
+  - Super Admin panel fully functional (frontend + backend)
+  - RBAC middleware protecting all routes
+  - All 4 Super Admin automations running
+  - Security middleware stack applied (Helmet, rate-limit, Zod, CORS)
+
+----------------------------------------------------------------
+PHASE 2 — SCHOOL ADMIN PANEL
+Duration: Weeks 5–7
+----------------------------------------------------------------
+
+Module: School Admin Dashboard
+  - Admin home: school-level stats (students, teachers, classes)
+  - Student management
+      Add / edit / deactivate / bulk CSV import
+  - Teacher management
+      Add / edit / assign to subjects
+  - Class and section management
+  - Timetable builder
+      Week grid, period slots, auto conflict detection on save
+  - Academic calendar (exam dates, holidays, events)
+  - School-wide announcements (all users) or per class
+  - Leave request approval workflow
+  - Parent account creation + link to student
+  - Report card PDF generator (triggered by admin at semester end)
+  - School analytics (attendance trends, grade distribution)
+
+  Automations:
+    - timetableConflict.ts  → On save (sync) — teacher/room clash
+    - attendanceAlert.ts    → Daily 18:00 — students < 75% alert
+    - reportCard.ts         → On admin trigger — bulk PDF generation
+
+Deliverables:
+  - All admin CRUD endpoints live
+  - Timetable conflict detector working
+  - CSV bulk import functional
+  - PDF report card generation working
+
+----------------------------------------------------------------
+PHASE 3 — TEACHER MODULE
+Duration: Weeks 8–10
+----------------------------------------------------------------
+
+Module: Teacher Dashboard
+  - View assigned subjects and classes only
+  - Activity creation
+      Types: assignment, quiz, project, presentation
+      Fields: title, description, due date, total marks, file attachment
+      Modes: draft / published
+  - Submission viewer and grader
+  - Inline feedback and comments on submissions
+  - Rubric builder (grading criteria + weight percentages)
+  - Daily attendance marking per period (present/absent/late)
+  - Class-specific announcements
+  - Subject-level grade report (CSV export)
+  - Activity reuse from previous semester
+
+  Automations:
+    - dueDateLock.ts        → On due date pass (sync) — portal auto-closes
+    - ungradedReminder.ts   → Daily 10:00 — submissions ungraded 3+ days
+    - performanceSnapshot.ts→ Every Friday 17:00 — class avg email to teacher
+    - absenceStreak.ts      → On attendance mark (sync) — 3-day absence alert
+
+Deliverables:
+  - Teacher panel fully functional
+  - Activity + submission flow end-to-end
+  - Attendance system live
+  - All 4 teacher automations working
+
+----------------------------------------------------------------
+PHASE 4 — STUDENT MODULE
+Duration: Weeks 11–12
+----------------------------------------------------------------
+
+Module: Student Dashboard
+  - Home: pending tasks, upcoming deadlines, recent grades
+  - Timetable view (read-only)
+  - Subject activity feed (sorted by due date)
+  - File / text submission (auto-blocked after due date)
+  - Grades and feedback viewer
+  - Attendance percentage tracker
+  - Grade card PDF download
+  - Announcement feed
+  - Activity timeline (past + upcoming)
+  - Achievement badge system
+      Badges: Perfect Week, Top of Class, 7-day Submission Streak
+  - Streak counter (submissions, attendance)
+  - Profile update (photo via Cloudinary, bio)
+
+  Automations:
+    - dueDateReminder.ts    → 24hr and 2hr before deadline → push + email
+    - weeklyDigest.ts       → Monday 08:00 — progress summary email
+    - badgeAward.ts         → On event (sync) — milestone auto-badge
+    - lateBlock.ts          → On submit attempt — auto-reject if past due
+
+Deliverables:
+  - Student portal fully functional
+  - Submission flow with auto-block live
+  - Badge and streak system live
+  - All 4 student automations working
+
+----------------------------------------------------------------
+PHASE 5 — PARENT MODULE
+Duration: Week 13
+----------------------------------------------------------------
+
+Module: Parent Dashboard
+  - Child's timetable view
+  - Grade viewer (all subjects, all activities)
+  - Attendance percentage tracker
+  - Announcement feed
+  - Report card download
+  - Teacher messaging (toggle by admin)
+  - Consent form approvals (school trips, events)
+  - Multi-child switcher (one account, multiple children)
+
+  Automations:
+    - absenceNotify.ts      → On attendance mark — instant absence alert
+    - lowGradeAlert.ts      → On grade save — below threshold alert
+    - monthlyProgress.ts    → 1st of month — PDF progress report email
+
+Deliverables:
+  - Parent panel functional
+  - Multi-child switcher working
+  - All 3 parent automations live
+
+----------------------------------------------------------------
+PHASE 6 — ADVANCED & AI FEATURES
+Duration: Weeks 14–15
+----------------------------------------------------------------
+
+  - AI grade suggestion for teachers (mean ± std dev based)
+  - AI weak-area summary for students (per subject pattern)
+  - Predictive at-risk flag for admin (attendance + grade trend)
+  - Urdu / English language toggle (next-intl)
+  - PWA setup (offline timetable + activity list)
+  - Dark mode
+  - In-app notification bell (real-time with polling)
+  - Global search for admin (student, teacher, class)
+  - Leave request module (student → teacher → admin chain)
+  - Consent / approval forms module
+
+----------------------------------------------------------------
+PHASE 7 — TESTING, POLISH & DEPLOYMENT
+Duration: Weeks 16–17
+----------------------------------------------------------------
+
+  Testing:
+    - API unit tests (Jest + Supertest)
+    - End-to-end tests (Playwright)
+    - Security checks (XSS, CSRF, SQL injection, broken auth)
+    - Accessibility audit (WCAG 2.1 AA basics)
+
+  Polish:
+    - UI/UX review pass on all 5 role dashboards
+    - Mobile responsiveness check
+    - Loading states, empty states, error states
+
+  Deployment (all free tier):
+    - Frontend → Vercel (connect GitHub, auto-deploy)
+    - Backend  → Railway (connect GitHub, auto-deploy)
+    - Database → Supabase (already cloud)
+    - Files    → Cloudinary (already cloud)
+    - Email    → Resend (already cloud)
+    - SSL      → Auto via Vercel + Railway
+    - Monitoring → Sentry free tier (error tracking)
+
+  Documentation:
+    - API docs (auto-generated with Swagger/OpenAPI)
+    - User manual per role (PDF)
+    - README with setup instructions
+
+================================================================
+TECH STACK — FREE TIER FINAL
+================================================================
+
+Frontend:     Next.js 14 (App Router) + TypeScript
+Styling:      Tailwind CSS + shadcn/ui
+Backend:      Node.js + Express + TypeScript
+ORM:          Prisma
+Database:     PostgreSQL via Supabase (free — 500MB)
+Auth:         JWT + bcrypt (rounds=12) + refresh token rotation
+File Upload:  Cloudinary (free — 25GB, no AWS needed)
+Email:        Resend (free — 3,000/month)
+PDF:          @react-pdf/renderer
+Cron Jobs:    node-cron (runs inside Railway server)
+Hosting FE:   Vercel (free)
+Hosting BE:   Railway (free $5 credit)
+DB Hosting:   Supabase (free)
+Version Ctrl: GitHub
+CI/CD:        GitHub Actions (free)
+
+================================================================
+SECURITY STACK
+================================================================
+
+- Helmet.js            HTTP security headers
+- express-rate-limit   Brute force protection (login)
+- bcrypt (rounds=12)   Password hashing
+- JWT httpOnly cookie  XSS-safe token storage
+- Zod                  Input validation (every endpoint)
+- CORS whitelist       Only frontend domain allowed
+- Soft delete          No hard deletes anywhere
+- Audit log            Every admin/super action tracked
+- RBAC middleware      Every route protected by role
+
+================================================================
+AUTOMATION MASTER LIST
+================================================================
+
+Phase 1 — Super Admin:
+  weeklyBackup.ts       Every Sunday 00:00
+  monthlyReport.ts      1st of month 08:00
+  storageWarning.ts     Daily check
+  suspiciousLogin.ts    Real-time on failed login
+
+Phase 2 — School Admin:
+  timetableConflict.ts  On save (sync)
+  attendanceAlert.ts    Daily 18:00
+  reportCard.ts         On admin trigger
+
+Phase 3 — Teacher:
+  dueDateLock.ts        On due date pass (sync)
+  ungradedReminder.ts   Daily 10:00
+  performanceSnapshot.ts Every Friday 17:00
+  absenceStreak.ts      On attendance mark (sync)
+
+Phase 4 — Student:
+  dueDateReminder.ts    Hourly check (24hr + 2hr)
+  weeklyDigest.ts       Monday 08:00
+  badgeAward.ts         On event (sync)
+  lateBlock.ts          On submit (sync)
+
+Phase 5 — Parent:
+  absenceNotify.ts      On attendance mark (sync)
+  lowGradeAlert.ts      On grade save (sync)
+  monthlyProgress.ts    1st of month
+
+================================================================
+ROLE BUILD ORDER
+================================================================
+
+  1. Super Admin     Phase 1  ← CURRENT
+  2. School Admin    Phase 2
+  3. Teacher         Phase 3
+  4. Student         Phase 4
+  5. Parent          Phase 5
+
+================================================================
+END OF FILE
+================================================================

@@ -1,0 +1,419 @@
+// EduPortal — Prisma Schema
+// Postgres via Supabase. Soft deletes everywhere (isActive), never hard delete.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------
+
+enum Role {
+  super_admin
+  school_admin
+  teacher
+  student
+  parent
+}
+
+enum ActivityType {
+  assignment
+  quiz
+  project
+  presentation
+}
+
+enum AttendanceStatus {
+  present
+  absent
+  late
+}
+
+enum BadgeType {
+  perfect_week
+  top_of_class
+  streak_7
+}
+
+enum LeaveStatus {
+  pending
+  approved
+  rejected
+}
+
+// ---------------------------------------------------------------
+// Core: Users & Auth
+// ---------------------------------------------------------------
+
+model User {
+  id       String  @id @default(cuid())
+  name     String
+  email    String  @unique
+  password String // bcrypt hash, never returned in API responses
+  role     Role
+  schoolId String? // null for super_admin
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  school School? @relation(fields: [schoolId], references: [id])
+
+  studentProfile StudentProfile?
+  parentProfile  ParentProfile?
+
+  refreshTokens      RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
+
+  auditLogs     AuditLog[]
+  notifications Notification[]
+
+  teachingSubjects Subject[]      @relation("SubjectTeacher")
+  activities       Activity[]     @relation("ActivityCreatedBy")
+  submissions      Submission[]   @relation("SubmissionStudent")
+  attendanceMarks  Attendance[]   @relation("AttendanceStudent")
+  announcements    Announcement[] @relation("AnnouncementAuthor")
+  leaveRequests    LeaveRequest[] @relation("LeaveRequester")
+
+  @@index([schoolId])
+  @@index([role])
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique // sha256 of the raw refresh token
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  revokedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  otpHash   String // bcrypt hash of the 6-digit OTP
+  expiresAt DateTime // 10 minutes from creation
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------
+// School structure
+// ---------------------------------------------------------------
+
+model School {
+  id       String  @id @default(cuid())
+  name     String
+  city     String
+  phone    String?
+  adminId  String?
+  isActive Boolean @default(true)
+
+  // feature flags (per CLAUDE.md: parentPortal, aiFeatures, smsNotify, urdu)
+  featureParentPortal Boolean @default(true)
+  featureAi           Boolean @default(false)
+  featureSms          Boolean @default(false)
+  featureUrdu         Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users         User[]
+  classes       Class[]
+  timetable     TimetableSlot[]
+  academicDates AcademicDate[]
+  announcements Announcement[]
+
+  @@index([adminId])
+}
+
+model Class {
+  id       String  @id @default(cuid())
+  schoolId String
+  name     String // e.g. "Class 9"
+  section  String // e.g. "A"
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+
+  school          School           @relation(fields: [schoolId], references: [id])
+  subjects        Subject[]
+  studentProfiles StudentProfile[]
+  timetableSlots  TimetableSlot[]
+
+  @@index([schoolId])
+}
+
+model Subject {
+  id          String @id @default(cuid())
+  name        String
+  classId     String
+  teacherId   String
+  creditHours Int
+  isActive    Boolean @default(true)
+
+  createdAt DateTime @default(now())
+
+  class   Class @relation(fields: [classId], references: [id])
+  teacher User  @relation("SubjectTeacher", fields: [teacherId], references: [id])
+
+  activities     Activity[]
+  attendance     Attendance[]
+  timetableSlots TimetableSlot[]
+
+  @@index([classId])
+  @@index([teacherId])
+}
+
+// ---------------------------------------------------------------
+// Profiles
+// ---------------------------------------------------------------
+
+model StudentProfile {
+  id       String  @id @default(cuid())
+  userId   String  @unique
+  classId  String
+  rollNo   String
+  parentId String?
+  photoUrl String? // Cloudinary URL
+  bio      String?
+
+  createdAt DateTime @default(now())
+
+  user   User            @relation(fields: [userId], references: [id])
+  class  Class           @relation(fields: [classId], references: [id])
+  parent ParentProfile?  @relation(fields: [parentId], references: [id])
+
+  submissions Submission[]
+  grades      Grade[]      @relation("GradeStudent")
+  badges      Badge[]
+
+  @@index([classId])
+  @@index([parentId])
+}
+
+model ParentProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  createdAt DateTime @default(now())
+
+  user     User             @relation(fields: [userId], references: [id])
+  children StudentProfile[]
+}
+
+// ---------------------------------------------------------------
+// Timetable & Calendar
+// ---------------------------------------------------------------
+
+model TimetableSlot {
+  id        String @id @default(cuid())
+  schoolId  String
+  classId   String
+  subjectId String
+  dayOfWeek Int // 0 = Sunday ... 6 = Saturday
+  startTime String // "09:00"
+  endTime   String // "09:45"
+  room      String?
+
+  createdAt DateTime @default(now())
+
+  school  School  @relation(fields: [schoolId], references: [id])
+  class   Class   @relation(fields: [classId], references: [id])
+  subject Subject @relation(fields: [subjectId], references: [id])
+
+  @@index([schoolId])
+  @@index([classId])
+  @@index([subjectId])
+}
+
+model AcademicDate {
+  id       String   @id @default(cuid())
+  schoolId String
+  title    String
+  type     String // exam | holiday | event
+  date     DateTime
+
+  createdAt DateTime @default(now())
+
+  school School @relation(fields: [schoolId], references: [id])
+
+  @@index([schoolId])
+}
+
+// ---------------------------------------------------------------
+// Activities, Submissions, Grades
+// ---------------------------------------------------------------
+
+model Activity {
+  id          String       @id @default(cuid())
+  subjectId   String
+  createdById String
+  type        ActivityType
+  title       String
+  description String?
+  dueDate     DateTime
+  totalMarks  Int
+  fileUrl     String? // Cloudinary URL
+  isDraft     Boolean      @default(false)
+  isActive    Boolean      @default(true)
+
+  createdAt DateTime @default(now())
+
+  subject     Subject      @relation(fields: [subjectId], references: [id])
+  createdBy   User         @relation("ActivityCreatedBy", fields: [createdById], references: [id])
+  submissions Submission[]
+
+  @@index([subjectId])
+  @@index([dueDate])
+}
+
+model Submission {
+  id          String   @id @default(cuid())
+  activityId  String
+  studentId   String // StudentProfile.id
+  studentUserId String // User.id (for convenience relation)
+  fileUrl     String? // Cloudinary URL
+  textContent String?
+  submittedAt DateTime @default(now())
+  isLate      Boolean  @default(false)
+
+  activity      Activity        @relation(fields: [activityId], references: [id])
+  studentProfile StudentProfile @relation(fields: [studentId], references: [id])
+  studentUser   User            @relation("SubmissionStudent", fields: [studentUserId], references: [id])
+  grade         Grade?
+
+  @@unique([activityId, studentId])
+  @@index([activityId])
+  @@index([studentId])
+}
+
+model Grade {
+  id           String   @id @default(cuid())
+  submissionId String   @unique
+  studentId    String // StudentProfile.id (denormalized for fast queries)
+  marks        Float
+  feedback     String?
+  gradedAt     DateTime @default(now())
+
+  submission     Submission     @relation(fields: [submissionId], references: [id])
+  studentProfile StudentProfile @relation("GradeStudent", fields: [studentId], references: [id])
+
+  @@index([studentId])
+}
+
+// ---------------------------------------------------------------
+// Attendance
+// ---------------------------------------------------------------
+
+model Attendance {
+  id            String            @id @default(cuid())
+  studentId     String // User.id
+  subjectId     String
+  date          DateTime
+  status        AttendanceStatus
+
+  createdAt DateTime @default(now())
+
+  student User    @relation("AttendanceStudent", fields: [studentId], references: [id])
+  subject Subject @relation(fields: [subjectId], references: [id])
+
+  @@unique([studentId, subjectId, date])
+  @@index([studentId])
+  @@index([subjectId])
+}
+
+// ---------------------------------------------------------------
+// Announcements, Leave, Notifications, Badges, Audit
+// ---------------------------------------------------------------
+
+model Announcement {
+  id       String  @id @default(cuid())
+  schoolId String
+  authorId String
+  classId  String? // null = school-wide
+  title    String
+  body     String
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+
+  school School @relation(fields: [schoolId], references: [id])
+  author User   @relation("AnnouncementAuthor", fields: [authorId], references: [id])
+
+  @@index([schoolId])
+  @@index([classId])
+}
+
+model LeaveRequest {
+  id          String      @id @default(cuid())
+  requesterId String // User.id (student or teacher)
+  reason      String
+  startDate   DateTime
+  endDate     DateTime
+  status      LeaveStatus @default(pending)
+  reviewedBy  String?
+  reviewedAt  DateTime?
+
+  createdAt DateTime @default(now())
+
+  requester User @relation("LeaveRequester", fields: [requesterId], references: [id])
+
+  @@index([requesterId])
+  @@index([status])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model Badge {
+  id        String    @id @default(cuid())
+  studentId String // StudentProfile.id
+  type      BadgeType
+  awardedAt DateTime  @default(now())
+
+  studentProfile StudentProfile @relation(fields: [studentId], references: [id])
+
+  @@index([studentId])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String
+  action      String
+  targetTable String?
+  targetId    String?
+  meta        Json?
+  ip          String?
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
