@@ -88,6 +88,7 @@ const updateSchoolSchema = z.object({
   name: z.string().min(1).optional(),
   city: z.string().min(1).optional(),
   phone: z.string().optional(),
+  isActive: z.boolean().optional(), // lets the frontend re-enable a soft-deleted school
 });
 
 export async function updateSchool(req: AuthRequest, res: Response): Promise<void> {
