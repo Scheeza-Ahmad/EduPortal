@@ -15,7 +15,7 @@ export async function sendEmail({ to, subject, html }: SendEmailInput): Promise<
   }
 
   const resend = new Resend(apiKey);
-  const from = process.env.EMAIL_FROM ?? 'noreply@eduportal.dev';
+  const from = process.env.EMAIL_FROM ?? 'onboarding@resend.dev';
 
   const { error } = await resend.emails.send({ from, to, subject, html });
 

@@ -89,6 +89,10 @@ const updateSchoolSchema = z.object({
   city: z.string().min(1).optional(),
   phone: z.string().optional(),
   isActive: z.boolean().optional(), // lets the frontend re-enable a soft-deleted school
+  featureParentPortal: z.boolean().optional(),
+  featureAi: z.boolean().optional(),
+  featureSms: z.boolean().optional(),
+  featureUrdu: z.boolean().optional(),
 });
 
 export async function updateSchool(req: AuthRequest, res: Response): Promise<void> {
@@ -262,11 +266,15 @@ export async function triggerBackup(req: AuthRequest, res: Response): Promise<vo
 
   const superAdmin = await prisma.user.findUnique({ where: { id: req.user!.userId } });
   if (superAdmin) {
-    await sendEmail({
-      to: superAdmin.email,
-      subject: 'EduPortal backup triggered',
-      html: `<p>A manual database backup was triggered at ${new Date().toISOString()}.</p>`,
-    });
+    try {
+      await sendEmail({
+        to: superAdmin.email,
+        subject: 'EduPortal backup triggered',
+        html: `<p>A manual database backup was triggered at ${new Date().toISOString()}.</p>`,
+      });
+    } catch (err) {
+      console.warn('[backup] Email notification failed:', err);
+    }
   }
 
   send(res, 200, { message: 'Backup triggered' });

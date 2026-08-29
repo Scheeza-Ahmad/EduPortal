@@ -3,6 +3,7 @@
 import { ReactNode, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
@@ -20,6 +21,12 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
   const router = useRouter();
   const { accessToken, user, setAuth, clearAuth } = useAuthStore();
   const [checkingSession, setCheckingSession] = useState(true);
+  const [pendingHref, setPendingHref] = useState<string | null>(null);
+
+  // Clear the pending indicator once the route has actually changed.
+  useEffect(() => {
+    setPendingHref(null);
+  }, [pathname]);
 
   useEffect(() => {
     // Access token lives in memory only, so it's gone after a page refresh.
@@ -77,23 +84,32 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
         <div className="mb-6 px-2 text-lg font-semibold">EduPortal</div>
         <nav className="space-y-1">
           {NAV_ITEMS.map((item) => {
-            const isActive =
-              item.href === '/super-admin'
+            // Highlight optimistically on the clicked link so the active
+            // state updates the instant a user clicks, without waiting for
+            // the route transition to finish.
+            const isActive = pendingHref
+              ? pendingHref === item.href
+              : item.href === '/super-admin'
                 ? pathname === item.href
                 : pathname.startsWith(item.href);
+
+            const isPending = pendingHref === item.href && pendingHref !== pathname;
 
             return (
               <Link
                 key={item.href}
                 href={item.href}
+                prefetch
+                onClick={() => setPendingHref(item.href)}
                 className={cn(
-                  'block rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                  'flex items-center justify-between rounded-md px-3 py-2 text-sm font-medium transition-colors',
                   isActive
                     ? 'bg-primary text-primary-foreground'
                     : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 )}
               >
-                {item.label}
+                <span>{item.label}</span>
+                {isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               </Link>
             );
           })}

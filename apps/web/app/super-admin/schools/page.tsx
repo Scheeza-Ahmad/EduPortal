@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
 import {
   Card,
   CardContent,
@@ -46,9 +47,21 @@ interface FormState {
   name: string;
   city: string;
   phone: string;
+  featureParentPortal: boolean;
+  featureAi: boolean;
+  featureSms: boolean;
+  featureUrdu: boolean;
 }
 
-const EMPTY_FORM: FormState = { name: '', city: '', phone: '' };
+const EMPTY_FORM: FormState = {
+  name: '',
+  city: '',
+  phone: '',
+  featureParentPortal: false,
+  featureAi: false,
+  featureSms: false,
+  featureUrdu: false,
+};
 
 export default function SchoolsPage() {
   const [schools, setSchools] = useState<School[]>([]);
@@ -90,7 +103,15 @@ export default function SchoolsPage() {
 
   function openEditDialog(school: School) {
     setEditingSchool(school);
-    setForm({ name: school.name, city: school.city, phone: school.phone ?? '' });
+    setForm({
+      name: school.name,
+      city: school.city,
+      phone: school.phone ?? '',
+      featureParentPortal: school.featureParentPortal,
+      featureAi: school.featureAi,
+      featureSms: school.featureSms,
+      featureUrdu: school.featureUrdu,
+    });
     setFormError(null);
     setDialogOpen(true);
   }
@@ -100,17 +121,23 @@ export default function SchoolsPage() {
     setFormError(null);
     setSubmitting(true);
 
-    const payload = {
-      name: form.name,
-      city: form.city,
-      phone: form.phone || undefined,
-    };
-
     try {
       if (editingSchool) {
-        await api.patch(`/api/super/schools/${editingSchool.id}`, payload);
+        await api.patch(`/api/super/schools/${editingSchool.id}`, {
+          name: form.name,
+          city: form.city,
+          phone: form.phone || undefined,
+          featureParentPortal: form.featureParentPortal,
+          featureAi: form.featureAi,
+          featureSms: form.featureSms,
+          featureUrdu: form.featureUrdu,
+        });
       } else {
-        await api.post('/api/super/schools', payload);
+        await api.post('/api/super/schools', {
+          name: form.name,
+          city: form.city,
+          phone: form.phone || undefined,
+        });
       }
       setDialogOpen(false);
       await loadSchools();
@@ -269,6 +296,58 @@ export default function SchoolsPage() {
                 onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
               />
             </div>
+
+            {editingSchool && (
+              <div className="space-y-3 border-t pt-4">
+                <p className="text-sm font-medium">Features</p>
+
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="feature-parent-portal" className="font-normal">
+                    Parent Portal
+                  </Label>
+                  <Switch
+                    id="feature-parent-portal"
+                    checked={form.featureParentPortal}
+                    onCheckedChange={(checked) =>
+                      setForm((f) => ({ ...f, featureParentPortal: checked }))
+                    }
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="feature-ai" className="font-normal">
+                    AI Features
+                  </Label>
+                  <Switch
+                    id="feature-ai"
+                    checked={form.featureAi}
+                    onCheckedChange={(checked) => setForm((f) => ({ ...f, featureAi: checked }))}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="feature-sms" className="font-normal">
+                    SMS Notifications
+                  </Label>
+                  <Switch
+                    id="feature-sms"
+                    checked={form.featureSms}
+                    onCheckedChange={(checked) => setForm((f) => ({ ...f, featureSms: checked }))}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="feature-urdu" className="font-normal">
+                    Urdu Language
+                  </Label>
+                  <Switch
+                    id="feature-urdu"
+                    checked={form.featureUrdu}
+                    onCheckedChange={(checked) => setForm((f) => ({ ...f, featureUrdu: checked }))}
+                  />
+                </div>
+              </div>
+            )}
 
             {formError && (
               <p className="text-sm text-destructive" role="alert">
