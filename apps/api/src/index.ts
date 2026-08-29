@@ -6,6 +6,7 @@ import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
 import authRoutes from './routes/auth';
 import superRoutes from './routes/super';
+import adminRoutes from './routes/admin';
 import { errorHandler } from './middleware/errorHandler';
 import { startJobs } from './jobs';
 
@@ -36,6 +37,7 @@ app.get('/health', (req, res) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/super', superRoutes);
+app.use('/api/admin', adminRoutes);
 
 app.use(errorHandler);
 

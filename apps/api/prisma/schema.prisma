@@ -47,6 +47,12 @@ enum LeaveStatus {
   rejected
 }
 
+enum Wing {
+  junior // Class 1-5
+  senior // Class 6-10
+  both // teachers only — can teach/class-teach either wing
+}
+
 // ---------------------------------------------------------------
 // Core: Users & Auth
 // ---------------------------------------------------------------
@@ -67,14 +73,16 @@ model User {
 
   studentProfile StudentProfile?
   parentProfile  ParentProfile?
+  teacherProfile TeacherProfile?
 
-  refreshTokens      RefreshToken[]
+  refreshTokens       RefreshToken[]
   passwordResetTokens PasswordResetToken[]
 
   auditLogs     AuditLog[]
   notifications Notification[]
 
   teachingSubjects Subject[]      @relation("SubjectTeacher")
+  classTeacherOf   Class[]        @relation("ClassTeacher")
   activities       Activity[]     @relation("ActivityCreatedBy")
   submissions      Submission[]   @relation("SubmissionStudent")
   attendanceMarks  Attendance[]   @relation("AttendanceStudent")
@@ -86,11 +94,11 @@ model User {
 }
 
 model RefreshToken {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  tokenHash String   @unique // sha256 of the raw refresh token
+  tokenHash String    @unique // sha256 of the raw refresh token
   expiresAt DateTime
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
   revokedAt DateTime?
 
   user User @relation(fields: [userId], references: [id])
@@ -142,24 +150,30 @@ model School {
 }
 
 model Class {
-  id       String  @id @default(cuid())
-  schoolId String
-  name     String // e.g. "Class 9"
-  section  String // e.g. "A"
-  isActive Boolean @default(true)
+  id             String  @id @default(cuid())
+  schoolId       String
+  number         Int // 1-10 (the class/grade number)
+  section        String // "A" | "B" | "C"
+  wing           Wing // auto-assigned from number: 1-5 -> junior, 6-10 -> senior
+  classTeacherId String? // one class teacher per section
+  isActive       Boolean @default(true)
 
   createdAt DateTime @default(now())
 
   school          School           @relation(fields: [schoolId], references: [id])
+  classTeacher    User?            @relation("ClassTeacher", fields: [classTeacherId], references: [id])
   subjects        Subject[]
   studentProfiles StudentProfile[]
   timetableSlots  TimetableSlot[]
+  announcements   Announcement[]
 
+  @@unique([schoolId, number, section])
   @@index([schoolId])
+  @@index([wing])
 }
 
 model Subject {
-  id          String @id @default(cuid())
+  id          String  @id @default(cuid())
   name        String
   classId     String
   teacherId   String
@@ -184,19 +198,22 @@ model Subject {
 // ---------------------------------------------------------------
 
 model StudentProfile {
-  id       String  @id @default(cuid())
-  userId   String  @unique
+  id       String    @id @default(cuid())
+  userId   String    @unique
   classId  String
   rollNo   String
   parentId String?
+  dob      DateTime?
+  phone    String?
+  address  String?
   photoUrl String? // Cloudinary URL
   bio      String?
 
   createdAt DateTime @default(now())
 
-  user   User            @relation(fields: [userId], references: [id])
-  class  Class           @relation(fields: [classId], references: [id])
-  parent ParentProfile?  @relation(fields: [parentId], references: [id])
+  user   User           @relation(fields: [userId], references: [id])
+  class  Class          @relation(fields: [classId], references: [id])
+  parent ParentProfile? @relation(fields: [parentId], references: [id])
 
   submissions Submission[]
   grades      Grade[]      @relation("GradeStudent")
@@ -216,12 +233,23 @@ model ParentProfile {
   children StudentProfile[]
 }
 
+model TeacherProfile {
+  id             String  @id @default(cuid())
+  userId         String  @unique
+  wing           Wing // junior | senior | both
+  isClassTeacher Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
 // ---------------------------------------------------------------
 // Timetable & Calendar
 // ---------------------------------------------------------------
 
 model TimetableSlot {
-  id        String @id @default(cuid())
+  id        String  @id @default(cuid())
   schoolId  String
   classId   String
   subjectId String
@@ -283,19 +311,19 @@ model Activity {
 }
 
 model Submission {
-  id          String   @id @default(cuid())
-  activityId  String
-  studentId   String // StudentProfile.id
+  id            String   @id @default(cuid())
+  activityId    String
+  studentId     String // StudentProfile.id
   studentUserId String // User.id (for convenience relation)
-  fileUrl     String? // Cloudinary URL
-  textContent String?
-  submittedAt DateTime @default(now())
-  isLate      Boolean  @default(false)
+  fileUrl       String? // Cloudinary URL
+  textContent   String?
+  submittedAt   DateTime @default(now())
+  isLate        Boolean  @default(false)
 
-  activity      Activity        @relation(fields: [activityId], references: [id])
+  activity       Activity       @relation(fields: [activityId], references: [id])
   studentProfile StudentProfile @relation(fields: [studentId], references: [id])
-  studentUser   User            @relation("SubmissionStudent", fields: [studentUserId], references: [id])
-  grade         Grade?
+  studentUser    User           @relation("SubmissionStudent", fields: [studentUserId], references: [id])
+  grade          Grade?
 
   @@unique([activityId, studentId])
   @@index([activityId])
@@ -321,11 +349,11 @@ model Grade {
 // ---------------------------------------------------------------
 
 model Attendance {
-  id            String            @id @default(cuid())
-  studentId     String // User.id
-  subjectId     String
-  date          DateTime
-  status        AttendanceStatus
+  id        String           @id @default(cuid())
+  studentId String // User.id
+  subjectId String
+  date      DateTime
+  status    AttendanceStatus
 
   createdAt DateTime @default(now())
 
@@ -354,6 +382,7 @@ model Announcement {
 
   school School @relation(fields: [schoolId], references: [id])
   author User   @relation("AnnouncementAuthor", fields: [authorId], references: [id])
+  class  Class? @relation(fields: [classId], references: [id])
 
   @@index([schoolId])
   @@index([classId])

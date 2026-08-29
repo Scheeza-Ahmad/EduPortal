@@ -4,10 +4,12 @@ import { requireRole } from '../middleware/rbac';
 import {
   assignAdmin,
   createSchool,
+  createSchoolAdmin,
   deleteSchool,
   getAuditLogs,
   getSchools,
   getStats,
+  getUsers,
   impersonateUser,
   toggleFeatures,
   triggerBackup,
@@ -20,11 +22,14 @@ router.use(verifyToken, requireRole('super_admin'));
 
 router.get('/stats', getStats);
 
+router.get('/users', getUsers);
+
 router.get('/schools', getSchools);
 router.post('/schools', createSchool);
 router.patch('/schools/:id', updateSchool);
 router.delete('/schools/:id', deleteSchool);
-router.post('/schools/:id/assign-admin', assignAdmin);
+router.patch('/schools/:id/admin', assignAdmin);
+router.post('/schools/:id/admin/create', createSchoolAdmin);
 router.patch('/schools/:id/features', toggleFeatures);
 
 router.get('/audit-logs', getAuditLogs);

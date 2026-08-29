@@ -29,6 +29,14 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 interface School {
   id: string;
@@ -36,6 +44,7 @@ interface School {
   city: string;
   phone: string | null;
   adminId: string | null;
+  admin: { id: string; name: string; email: string } | null;
   isActive: boolean;
   featureParentPortal: boolean;
   featureAi: boolean;
@@ -63,6 +72,22 @@ const EMPTY_FORM: FormState = {
   featureUrdu: false,
 };
 
+interface ExistingUser {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  schoolId: string | null;
+}
+
+interface CreateAdminForm {
+  name: string;
+  email: string;
+  password: string;
+}
+
+const EMPTY_CREATE_ADMIN_FORM: CreateAdminForm = { name: '', email: '', password: '' };
+
 export default function SchoolsPage() {
   const [schools, setSchools] = useState<School[]>([]);
   const [loading, setLoading] = useState(true);
@@ -74,6 +99,19 @@ export default function SchoolsPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+
+  const [assignDialogOpen, setAssignDialogOpen] = useState(false);
+  const [assignSchool, setAssignSchool] = useState<School | null>(null);
+
+  const [createAdminForm, setCreateAdminForm] = useState<CreateAdminForm>(EMPTY_CREATE_ADMIN_FORM);
+  const [createAdminError, setCreateAdminError] = useState<string | null>(null);
+  const [createAdminSubmitting, setCreateAdminSubmitting] = useState(false);
+
+  const [existingUsers, setExistingUsers] = useState<ExistingUser[]>([]);
+  const [existingUsersLoading, setExistingUsersLoading] = useState(false);
+  const [selectedUserId, setSelectedUserId] = useState<string>('');
+  const [assignExistingError, setAssignExistingError] = useState<string | null>(null);
+  const [assignExistingSubmitting, setAssignExistingSubmitting] = useState(false);
 
   async function loadSchools() {
     setLoading(true);
@@ -165,6 +203,63 @@ export default function SchoolsPage() {
     }
   }
 
+  async function openAssignDialog(school: School) {
+    setAssignSchool(school);
+    setCreateAdminForm(EMPTY_CREATE_ADMIN_FORM);
+    setCreateAdminError(null);
+    setSelectedUserId('');
+    setAssignExistingError(null);
+    setAssignDialogOpen(true);
+
+    setExistingUsersLoading(true);
+    try {
+      const res = await api.get<{ success: boolean; data: { users: ExistingUser[] } }>(
+        '/api/super/users?role=school_admin'
+      );
+      setExistingUsers(res.data.data.users);
+    } catch {
+      setExistingUsers([]);
+    } finally {
+      setExistingUsersLoading(false);
+    }
+  }
+
+  async function handleCreateAdminSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!assignSchool) return;
+    setCreateAdminError(null);
+    setCreateAdminSubmitting(true);
+
+    try {
+      await api.post(`/api/super/schools/${assignSchool.id}/admin/create`, createAdminForm);
+      setAssignDialogOpen(false);
+      await loadSchools();
+    } catch (err) {
+      const axiosErr = err as AxiosError<{ error?: string }>;
+      setCreateAdminError(axiosErr.response?.data?.error ?? 'Failed to create admin.');
+    } finally {
+      setCreateAdminSubmitting(false);
+    }
+  }
+
+  async function handleAssignExistingSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!assignSchool || !selectedUserId) return;
+    setAssignExistingError(null);
+    setAssignExistingSubmitting(true);
+
+    try {
+      await api.patch(`/api/super/schools/${assignSchool.id}/admin`, { userId: selectedUserId });
+      setAssignDialogOpen(false);
+      await loadSchools();
+    } catch (err) {
+      const axiosErr = err as AxiosError<{ error?: string }>;
+      setAssignExistingError(axiosErr.response?.data?.error ?? 'Failed to assign admin.');
+    } finally {
+      setAssignExistingSubmitting(false);
+    }
+  }
+
   function activeFeatures(school: School): string[] {
     const features: string[] = [];
     if (school.featureParentPortal) features.push('Parent Portal');
@@ -214,8 +309,12 @@ export default function SchoolsPage() {
                     <TableRow key={school.id}>
                       <TableCell className="font-medium">{school.name}</TableCell>
                       <TableCell>{school.city}</TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {school.adminId ? school.adminId.slice(0, 8) : 'Not assigned'}
+                      <TableCell>
+                        {school.admin ? (
+                          <span>{school.admin.name}</span>
+                        ) : (
+                          <span className="text-muted-foreground">Not assigned</span>
+                        )}
                       </TableCell>
                       <TableCell>
                         <Badge variant={school.isActive ? 'default' : 'secondary'}>
@@ -238,6 +337,13 @@ export default function SchoolsPage() {
                       <TableCell className="text-right space-x-2">
                         <Button variant="outline" size="sm" onClick={() => openEditDialog(school)}>
                           Edit
+                        </Button>
+                        <Button
+                          variant={school.admin ? 'outline' : 'default'}
+                          size="sm"
+                          onClick={() => openAssignDialog(school)}
+                        >
+                          {school.admin ? 'Change Admin' : 'Assign Admin'}
                         </Button>
                         <Button
                           variant={school.isActive ? 'destructive' : 'default'}
@@ -361,6 +467,118 @@ export default function SchoolsPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={assignDialogOpen} onOpenChange={setAssignDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Assign Admin{assignSchool ? ` — ${assignSchool.name}` : ''}</DialogTitle>
+          </DialogHeader>
+
+          <Tabs defaultValue="create">
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="create">Create New Admin</TabsTrigger>
+              <TabsTrigger value="existing">Assign Existing User</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="create" className="pt-2">
+              <form onSubmit={handleCreateAdminSubmit} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="admin-name">Name</Label>
+                  <Input
+                    id="admin-name"
+                    required
+                    value={createAdminForm.name}
+                    onChange={(e) =>
+                      setCreateAdminForm((f) => ({ ...f, name: e.target.value }))
+                    }
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="admin-email">Email</Label>
+                  <Input
+                    id="admin-email"
+                    type="email"
+                    required
+                    value={createAdminForm.email}
+                    onChange={(e) =>
+                      setCreateAdminForm((f) => ({ ...f, email: e.target.value }))
+                    }
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="admin-password">Password</Label>
+                  <Input
+                    id="admin-password"
+                    type="password"
+                    required
+                    minLength={8}
+                    value={createAdminForm.password}
+                    onChange={(e) =>
+                      setCreateAdminForm((f) => ({ ...f, password: e.target.value }))
+                    }
+                  />
+                </div>
+
+                {createAdminError && (
+                  <p className="text-sm text-destructive" role="alert">
+                    {createAdminError}
+                  </p>
+                )}
+
+                <DialogFooter>
+                  <Button type="submit" disabled={createAdminSubmitting}>
+                    {createAdminSubmitting ? 'Creating...' : 'Create & Assign'}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </TabsContent>
+
+            <TabsContent value="existing" className="pt-2">
+              <form onSubmit={handleAssignExistingSubmit} className="space-y-4">
+                <div className="space-y-2">
+                  <Label>School Admin User</Label>
+                  <Select value={selectedUserId} onValueChange={setSelectedUserId}>
+                    <SelectTrigger>
+                      <SelectValue
+                        placeholder={
+                          existingUsersLoading ? 'Loading...' : 'Select an existing user'
+                        }
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {existingUsers.length === 0 ? (
+                        <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                          No existing school_admin users found.
+                        </div>
+                      ) : (
+                        existingUsers.map((u) => (
+                          <SelectItem key={u.id} value={u.id}>
+                            {u.name} ({u.email}){u.schoolId ? ' — currently assigned' : ''}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {assignExistingError && (
+                  <p className="text-sm text-destructive" role="alert">
+                    {assignExistingError}
+                  </p>
+                )}
+
+                <DialogFooter>
+                  <Button type="submit" disabled={assignExistingSubmitting || !selectedUserId}>
+                    {assignExistingSubmitting ? 'Assigning...' : 'Assign'}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </TabsContent>
+          </Tabs>
         </DialogContent>
       </Dialog>
     </div>

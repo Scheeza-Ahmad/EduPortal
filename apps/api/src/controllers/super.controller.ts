@@ -1,5 +1,6 @@
 import { Response } from 'express';
 import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { prisma } from '../utils/prisma';
 import { send } from '../utils/response';
@@ -46,7 +47,48 @@ export async function getSchools(req: AuthRequest, res: Response): Promise<void>
     prisma.school.count(),
   ]);
 
-  send(res, 200, { schools, page, limit, total, totalPages: Math.ceil(total / limit) });
+  // School.adminId isn't a formal Prisma relation, so look admins up separately
+  // and attach them by id rather than joining.
+  const adminIds = [...new Set(schools.map((s) => s.adminId).filter((id): id is string => Boolean(id)))];
+  const admins = adminIds.length
+    ? await prisma.user.findMany({
+        where: { id: { in: adminIds } },
+        select: { id: true, name: true, email: true },
+      })
+    : [];
+  const adminsById = new Map(admins.map((a) => [a.id, a]));
+
+  const schoolsWithAdmin = schools.map((school) => ({
+    ...school,
+    admin: school.adminId ? (adminsById.get(school.adminId) ?? null) : null,
+  }));
+
+  send(res, 200, {
+    schools: schoolsWithAdmin,
+    page,
+    limit,
+    total,
+    totalPages: Math.ceil(total / limit),
+  });
+}
+
+// ---------------------------------------------------------------
+// GET /api/super/users?role=school_admin
+// Minimal lookup used by the "Assign Existing User" flow.
+// ---------------------------------------------------------------
+
+const roleQuerySchema = z.enum(['super_admin', 'school_admin', 'teacher', 'student', 'parent']);
+
+export async function getUsers(req: AuthRequest, res: Response): Promise<void> {
+  const roleQuery = roleQuerySchema.safeParse(req.query.role);
+
+  const users = await prisma.user.findMany({
+    where: { isActive: true, ...(roleQuery.success ? { role: roleQuery.data } : {}) },
+    select: { id: true, name: true, email: true, role: true, schoolId: true },
+    orderBy: { name: 'asc' },
+  });
+
+  send(res, 200, { users });
 }
 
 // ---------------------------------------------------------------
@@ -145,7 +187,7 @@ export async function deleteSchool(req: AuthRequest, res: Response): Promise<voi
 }
 
 // ---------------------------------------------------------------
-// POST /api/super/schools/:id/assign-admin
+// PATCH /api/super/schools/:id/admin
 // ---------------------------------------------------------------
 
 const assignAdminSchema = z.object({
@@ -163,19 +205,26 @@ export async function assignAdmin(req: AuthRequest, res: Response): Promise<void
   const { userId } = parsed.data;
 
   const targetUser = await prisma.user.findUnique({ where: { id: userId } });
-  if (!targetUser || targetUser.role !== 'school_admin') {
-    send(res, 400, undefined, 'Target user must be an existing school_admin');
+  if (!targetUser || !targetUser.isActive) {
+    send(res, 404, undefined, 'User not found');
+    return;
+  }
+  if (targetUser.role === 'super_admin') {
+    send(res, 400, undefined, 'Cannot reassign a super_admin to a school');
     return;
   }
 
   const [school] = await prisma.$transaction([
     prisma.school.update({ where: { id: schoolId }, data: { adminId: userId } }),
-    prisma.user.update({ where: { id: userId }, data: { schoolId } }),
+    prisma.user.update({
+      where: { id: userId },
+      data: { schoolId, role: 'school_admin' },
+    }),
   ]);
 
   await auditLog({
     userId: req.user!.userId,
-    action: 'SCHOOL_ASSIGN_ADMIN',
+    action: 'ASSIGN_ADMIN',
     targetTable: 'School',
     targetId: schoolId,
     meta: { adminUserId: userId },
@@ -183,6 +232,70 @@ export async function assignAdmin(req: AuthRequest, res: Response): Promise<void
   });
 
   send(res, 200, school);
+}
+
+// ---------------------------------------------------------------
+// POST /api/super/schools/:id/admin/create
+// ---------------------------------------------------------------
+
+const createSchoolAdminSchema = z.object({
+  name: z.string().min(1),
+  email: z.string().email(),
+  password: z.string().min(8),
+});
+
+export async function createSchoolAdmin(req: AuthRequest, res: Response): Promise<void> {
+  const parsed = createSchoolAdminSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid input');
+    return;
+  }
+
+  const { id: schoolId } = req.params;
+  const { name, email, password } = parsed.data;
+
+  const school = await prisma.school.findUnique({ where: { id: schoolId } });
+  if (!school) {
+    send(res, 404, undefined, 'School not found');
+    return;
+  }
+
+  const existing = await prisma.user.findUnique({ where: { email } });
+  if (existing) {
+    send(res, 400, undefined, 'Email already in use');
+    return;
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 12);
+
+  const user = await prisma.user.create({
+    data: { name, email, password: hashedPassword, role: 'school_admin', schoolId },
+  });
+
+  // Link the school to its new admin now that we have the generated user id.
+  await prisma.school.update({ where: { id: schoolId }, data: { adminId: user.id } });
+
+  try {
+    await sendEmail({
+      to: email,
+      subject: 'Welcome to EduPortal',
+      html: `<p>Hi ${name},</p><p>A School Admin account has been created for you at <strong>${school.name}</strong>. Sign in with the email and password provided to you by the platform administrator.</p>`,
+    });
+  } catch (err) {
+    console.warn('[createSchoolAdmin] Welcome email failed:', err);
+  }
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'CREATE_SCHOOL_ADMIN',
+    targetTable: 'User',
+    targetId: user.id,
+    meta: { schoolId, email },
+    ip: req.ip,
+  });
+
+  const { password: _password, ...safeUser } = user;
+  send(res, 201, safeUser);
 }
 
 // ---------------------------------------------------------------
