@@ -34,8 +34,12 @@ import {
 
 interface ClassOption {
   id: string;
-  name: string;
+  number: number;
   section: string;
+}
+
+function classLabel(c: { number: number; section: string }): string {
+  return `Class ${c.number} - ${c.section}`;
 }
 
 interface Student {
@@ -276,7 +280,7 @@ export default function StudentsPage() {
               <SelectItem value="all">All classes</SelectItem>
               {classes.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
-                  {c.name} {c.section}
+                  {classLabel(c)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -314,7 +318,7 @@ export default function StudentsPage() {
                         <TableCell className="text-muted-foreground">{student.email}</TableCell>
                         <TableCell>
                           {student.studentProfile
-                            ? `${student.studentProfile.class.name} ${student.studentProfile.class.section}`
+                            ? classLabel(student.studentProfile.class)
                             : '—'}
                         </TableCell>
                         <TableCell>{student.studentProfile?.rollNo ?? '—'}</TableCell>
@@ -430,7 +434,7 @@ export default function StudentsPage() {
                   <SelectContent>
                     {classes.map((c) => (
                       <SelectItem key={c.id} value={c.id}>
-                        {c.name} {c.section}
+                        {classLabel(c)}
                       </SelectItem>
                     ))}
                   </SelectContent>

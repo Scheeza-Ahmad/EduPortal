@@ -33,8 +33,12 @@ import {
 
 interface ClassOption {
   id: string;
-  name: string;
+  number: number;
   section: string;
+}
+
+function classLabel(c: { number: number; section: string }): string {
+  return `Class ${c.number} - ${c.section}`;
 }
 
 interface TeacherOption {
@@ -197,7 +201,7 @@ export default function SubjectsPage() {
               <SelectItem value="all">All classes</SelectItem>
               {classes.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
-                  {c.name} {c.section}
+                  {classLabel(c)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -231,9 +235,7 @@ export default function SubjectsPage() {
                   subjects.map((subject) => (
                     <TableRow key={subject.id}>
                       <TableCell className="font-medium">{subject.name}</TableCell>
-                      <TableCell>
-                        {subject.class.name} {subject.class.section}
-                      </TableCell>
+                      <TableCell>{classLabel(subject.class)}</TableCell>
                       <TableCell className="text-muted-foreground">
                         {subject.teacher.name}
                       </TableCell>
@@ -302,7 +304,7 @@ export default function SubjectsPage() {
                   <SelectContent>
                     {classes.map((c) => (
                       <SelectItem key={c.id} value={c.id}>
-                        {c.name} {c.section}
+                        {classLabel(c)}
                       </SelectItem>
                     ))}
                   </SelectContent>

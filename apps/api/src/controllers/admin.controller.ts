@@ -203,7 +203,10 @@ export async function updateStudent(req: AuthRequest, res: Response): Promise<vo
   }
 
   const { id } = req.params;
-  const existing = await prisma.user.findFirst({ where: { id, schoolId, role: 'student' } });
+  const existing = await prisma.user.findFirst({
+    where: { id, schoolId, role: 'student' },
+    include: { studentProfile: true },
+  });
   if (!existing) {
     send(res, 404, undefined, 'Student not found');
     return;
@@ -219,17 +222,31 @@ export async function updateStudent(req: AuthRequest, res: Response): Promise<vo
     }
   }
 
+  // A StudentProfile normally always exists (created together with the user),
+  // but upsert defensively in case it's ever missing. The "create" branch
+  // still needs classId/rollNo, so fall back to the existing profile's
+  // values when this PATCH didn't include them.
+  const resolvedClassId = classId ?? existing.studentProfile?.classId;
+  const resolvedRollNo = rollNo ?? existing.studentProfile?.rollNo;
+  if (!resolvedClassId || !resolvedRollNo) {
+    send(res, 400, undefined, 'classId and rollNo are required');
+    return;
+  }
+
   try {
-    const user = await prisma.user.update({
-      where: { id },
-      data: {
-        name,
-        email,
-        studentProfile: {
-          update: { classId, rollNo, dob: dob ? new Date(dob) : undefined, phone, address },
-        },
+    const user = await prisma.user.update({ where: { id }, data: { name, email } });
+
+    const studentProfile = await prisma.studentProfile.upsert({
+      where: { userId: id },
+      update: { classId, rollNo, dob: dob ? new Date(dob) : undefined, phone, address },
+      create: {
+        userId: id,
+        classId: resolvedClassId,
+        rollNo: resolvedRollNo,
+        dob: dob ? new Date(dob) : undefined,
+        phone,
+        address,
       },
-      include: { studentProfile: true },
     });
 
     await auditLog({
@@ -241,7 +258,7 @@ export async function updateStudent(req: AuthRequest, res: Response): Promise<vo
       ip: req.ip,
     });
 
-    send(res, 200, stripPassword(user));
+    send(res, 200, { ...stripPassword(user), studentProfile });
   } catch (err) {
     if (isUniqueConstraintError(err)) {
       send(res, 400, undefined, 'Email already in use');
@@ -381,7 +398,10 @@ export async function getTeachers(req: AuthRequest, res: Response): Promise<void
 
   const teachers = await prisma.user.findMany({
     where: { schoolId, role: 'teacher' },
-    include: { teachingSubjects: { select: { id: true, name: true, classId: true } } },
+    include: {
+      teachingSubjects: { select: { id: true, name: true, classId: true } },
+      teacherProfile: true,
+    },
     orderBy: { createdAt: 'desc' },
     take: 100,
   });
@@ -393,6 +413,7 @@ const createTeacherSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
   password: z.string().min(8),
+  wing: z.enum(['junior', 'senior', 'both']),
   subjectIds: z.array(z.string()).optional(),
 });
 
@@ -405,13 +426,21 @@ export async function createTeacher(req: AuthRequest, res: Response): Promise<vo
     send(res, 400, undefined, 'Invalid teacher data');
     return;
   }
-  const { name, email, password, subjectIds } = parsed.data;
+  const { name, email, password, wing, subjectIds } = parsed.data;
 
   const hashedPassword = await bcrypt.hash(password, 12);
 
   try {
     const user = await prisma.user.create({
-      data: { name, email, password: hashedPassword, role: 'teacher', schoolId },
+      data: {
+        name,
+        email,
+        password: hashedPassword,
+        role: 'teacher',
+        schoolId,
+        teacherProfile: { create: { wing } },
+      },
+      include: { teacherProfile: true },
     });
 
     if (subjectIds && subjectIds.length > 0) {
@@ -426,7 +455,7 @@ export async function createTeacher(req: AuthRequest, res: Response): Promise<vo
       action: 'TEACHER_CREATE',
       targetTable: 'User',
       targetId: user.id,
-      meta: { email, subjectIds },
+      meta: { email, wing, subjectIds },
       ip: req.ip,
     });
 

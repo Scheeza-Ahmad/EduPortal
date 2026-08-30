@@ -24,12 +24,22 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+
+type Wing = 'junior' | 'senior' | 'both';
 
 interface SubjectOption {
   id: string;
   name: string;
   classId: string;
-  class?: { name: string; section: string };
+  class?: { number: number; section: string };
 }
 
 interface Teacher {
@@ -38,22 +48,32 @@ interface Teacher {
   email: string;
   isActive: boolean;
   teachingSubjects: { id: string; name: string; classId: string }[];
+  teacherProfile: { wing: Wing; isClassTeacher: boolean } | null;
 }
 
 interface TeacherForm {
   name: string;
   email: string;
   password: string;
+  wing: Wing | '';
   subjectIds: string[];
 }
 
-const EMPTY_FORM: TeacherForm = { name: '', email: '', password: '', subjectIds: [] };
+const EMPTY_FORM: TeacherForm = { name: '', email: '', password: '', wing: '', subjectIds: [] };
+
+const WING_LABELS: Record<Wing, string> = {
+  junior: 'Junior Wing (Class 1-5)',
+  senior: 'Senior Wing (Class 6-10)',
+  both: 'Both Wings',
+};
 
 export default function TeachersPage() {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [subjects, setSubjects] = useState<SubjectOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const [activeTab, setActiveTab] = useState<Wing>('junior');
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingTeacher, setEditingTeacher] = useState<Teacher | null>(null);
@@ -106,6 +126,7 @@ export default function TeachersPage() {
       name: teacher.name,
       email: teacher.email,
       password: '',
+      wing: teacher.teacherProfile?.wing ?? '',
       subjectIds: teacher.teachingSubjects.map((s) => s.id),
     });
     setFormError(null);
@@ -124,6 +145,12 @@ export default function TeachersPage() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setFormError(null);
+
+    if (!editingTeacher && !form.wing) {
+      setFormError('Please select a wing.');
+      return;
+    }
+
     setSubmitting(true);
 
     try {
@@ -138,6 +165,7 @@ export default function TeachersPage() {
           name: form.name,
           email: form.email,
           password: form.password,
+          wing: form.wing,
           subjectIds: form.subjectIds,
         });
       }
@@ -163,6 +191,77 @@ export default function TeachersPage() {
     }
   }
 
+  function teachersInWing(wing: Wing): Teacher[] {
+    return teachers.filter((t) => t.teacherProfile?.wing === wing);
+  }
+
+  function renderTeacherTable(list: Teacher[]) {
+    return (
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Name</TableHead>
+            <TableHead>Email</TableHead>
+            <TableHead>Subjects</TableHead>
+            <TableHead>Status</TableHead>
+            <TableHead className="text-right">Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {list.length === 0 ? (
+            <TableRow>
+              <TableCell colSpan={5} className="text-center text-muted-foreground">
+                No teachers in this wing yet.
+              </TableCell>
+            </TableRow>
+          ) : (
+            list.map((teacher) => (
+              <TableRow key={teacher.id}>
+                <TableCell className="font-medium">{teacher.name}</TableCell>
+                <TableCell className="text-muted-foreground">{teacher.email}</TableCell>
+                <TableCell>
+                  <div className="flex flex-wrap gap-1">
+                    {teacher.teachingSubjects.length === 0 ? (
+                      <span className="text-xs text-muted-foreground">None</span>
+                    ) : (
+                      teacher.teachingSubjects.map((s) => (
+                        <Badge key={s.id} variant="outline" className="text-xs">
+                          {s.name}
+                        </Badge>
+                      ))
+                    )}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <Badge variant={teacher.isActive ? 'default' : 'secondary'}>
+                    {teacher.isActive ? 'Active' : 'Inactive'}
+                  </Badge>
+                </TableCell>
+                <TableCell className="text-right">
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Button variant="outline" size="sm" onClick={() => openEditDialog(teacher)}>
+                      Edit
+                    </Button>
+                    {teacher.isActive && (
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        disabled={togglingId === teacher.id}
+                        onClick={() => handleDeactivate(teacher)}
+                      >
+                        {togglingId === teacher.id ? '...' : 'Deactivate'}
+                      </Button>
+                    )}
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))
+          )}
+        </TableBody>
+      </Table>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -170,79 +269,43 @@ export default function TeachersPage() {
         <Button onClick={openAddDialog}>Add Teacher</Button>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">All Teachers</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <p className="text-sm text-muted-foreground">Loading teachers...</p>
-          ) : error ? (
-            <p className="text-sm text-destructive">{error}</p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Subjects</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {teachers.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={5} className="text-center text-muted-foreground">
-                      No teachers yet.
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  teachers.map((teacher) => (
-                    <TableRow key={teacher.id}>
-                      <TableCell className="font-medium">{teacher.name}</TableCell>
-                      <TableCell className="text-muted-foreground">{teacher.email}</TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-1">
-                          {teacher.teachingSubjects.length === 0 ? (
-                            <span className="text-xs text-muted-foreground">None</span>
-                          ) : (
-                            teacher.teachingSubjects.map((s) => (
-                              <Badge key={s.id} variant="outline" className="text-xs">
-                                {s.name}
-                              </Badge>
-                            ))
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={teacher.isActive ? 'default' : 'secondary'}>
-                          {teacher.isActive ? 'Active' : 'Inactive'}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right space-x-2">
-                        <Button variant="outline" size="sm" onClick={() => openEditDialog(teacher)}>
-                          Edit
-                        </Button>
-                        {teacher.isActive && (
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            disabled={togglingId === teacher.id}
-                            onClick={() => handleDeactivate(teacher)}
-                          >
-                            {togglingId === teacher.id ? '...' : 'Deactivate'}
-                          </Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+      {loading ? (
+        <p className="text-sm text-muted-foreground">Loading teachers...</p>
+      ) : error ? (
+        <p className="text-sm text-destructive">{error}</p>
+      ) : (
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as Wing)}>
+          <TabsList>
+            <TabsTrigger value="junior">Junior</TabsTrigger>
+            <TabsTrigger value="senior">Senior</TabsTrigger>
+            <TabsTrigger value="both">Both</TabsTrigger>
+          </TabsList>
+          <TabsContent value="junior" className="pt-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Junior Wing Teachers</CardTitle>
+              </CardHeader>
+              <CardContent>{renderTeacherTable(teachersInWing('junior'))}</CardContent>
+            </Card>
+          </TabsContent>
+          <TabsContent value="senior" className="pt-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Senior Wing Teachers</CardTitle>
+              </CardHeader>
+              <CardContent>{renderTeacherTable(teachersInWing('senior'))}</CardContent>
+            </Card>
+          </TabsContent>
+          <TabsContent value="both" className="pt-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Both-Wing Teachers</CardTitle>
+              </CardHeader>
+              <CardContent>{renderTeacherTable(teachersInWing('both'))}</CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+      )}
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
@@ -287,6 +350,33 @@ export default function TeachersPage() {
             )}
 
             <div className="space-y-2">
+              <Label>Wing</Label>
+              {editingTeacher ? (
+                <p className="text-sm text-muted-foreground">
+                  {form.wing ? WING_LABELS[form.wing] : '—'} (wing can&apos;t be changed after
+                  creation)
+                </p>
+              ) : (
+                <Select
+                  value={form.wing}
+                  onValueChange={(v) => setForm((f) => ({ ...f, wing: v as Wing }))}
+                  required
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a wing" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(Object.entries(WING_LABELS) as [Wing, string][]).map(([value, label]) => (
+                      <SelectItem key={value} value={value}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+
+            <div className="space-y-2">
               <Label>Assigned Subjects</Label>
               {editingTeacher && (
                 <p className="text-xs text-muted-foreground">
@@ -311,7 +401,9 @@ export default function TeachersPage() {
                       />
                       <Label htmlFor={`subject-${subject.id}`} className="font-normal">
                         {subject.name}
-                        {subject.class ? ` (${subject.class.name} ${subject.class.section})` : ''}
+                        {subject.class
+                          ? ` (Class ${subject.class.number}${subject.class.section})`
+                          : ''}
                       </Label>
                     </div>
                   ))

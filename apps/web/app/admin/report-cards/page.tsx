@@ -21,8 +21,12 @@ import {
 
 interface ClassOption {
   id: string;
-  name: string;
+  number: number;
   section: string;
+}
+
+function classLabel(c: { number: number; section: string }): string {
+  return `Class ${c.number} - ${c.section}`;
 }
 
 interface StudentOption {
@@ -124,7 +128,7 @@ export default function ReportCardsPage() {
               <SelectContent>
                 {classes.map((c) => (
                   <SelectItem key={c.id} value={c.id}>
-                    {c.name} {c.section}
+                    {classLabel(c)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -170,8 +174,7 @@ export default function ReportCardsPage() {
             <CardHeader>
               <CardTitle className="text-base">{report.student.name}</CardTitle>
               <p className="text-sm text-muted-foreground">
-                Roll No {report.student.rollNo} · {report.student.class.name}{' '}
-                {report.student.class.section}
+                Roll No {report.student.rollNo} · {classLabel(report.student.class)}
               </p>
             </CardHeader>
             <CardContent>

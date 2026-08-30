@@ -87,6 +87,7 @@ const TYPE_LABELS: Record<ActivityType, string> = {
 export default function TeacherActivitiesPage() {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [subjects, setSubjects] = useState<SubjectOption[]>([]);
+  const [subjectsError, setSubjectsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -102,13 +103,15 @@ export default function TeacherActivitiesPage() {
   const [reuseLoading, setReuseLoading] = useState(false);
 
   async function loadSubjects() {
+    setSubjectsError(null);
     try {
       const res = await api.get<{ success: boolean; data: { subjects: SubjectOption[] } }>(
         '/api/teacher/subjects'
       );
       setSubjects(res.data.data.subjects);
-    } catch {
-      // Non-fatal — the subject dropdown will just be empty.
+    } catch (err) {
+      const axiosErr = err as AxiosError<{ error?: string }>;
+      setSubjectsError(axiosErr.response?.data?.error ?? 'Failed to load your subjects.');
     }
   }
 
@@ -366,14 +369,23 @@ export default function TeacherActivitiesPage() {
                     <SelectValue placeholder="Select a subject" />
                   </SelectTrigger>
                   <SelectContent>
-                    {subjects.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>
-                        {s.name} (Class {s.class.number}
-                        {s.class.section})
-                      </SelectItem>
-                    ))}
+                    {subjects.length === 0 ? (
+                      <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                        {subjectsError ?? 'No subjects assigned to you yet.'}
+                      </div>
+                    ) : (
+                      subjects.map((s) => (
+                        <SelectItem key={s.id} value={s.id}>
+                          {s.name} (Class {s.class.number}
+                          {s.class.section})
+                        </SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
+                {subjectsError && (
+                  <p className="text-xs text-destructive">{subjectsError}</p>
+                )}
               </div>
 
               <div className="space-y-2">
