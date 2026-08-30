@@ -298,6 +298,7 @@ model Activity {
   totalMarks  Int
   fileUrl     String? // Cloudinary URL
   isDraft     Boolean      @default(false)
+  isLocked    Boolean      @default(false) // set true once dueDate passes (dueDateLock job)
   isActive    Boolean      @default(true)
 
   createdAt DateTime @default(now())

@@ -6,6 +6,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 export const api = axios.create({
   baseURL: API_BASE_URL,
   withCredentials: true, // send the httpOnly refresh-token cookie
+  timeout: 10000, // don't let a slow/hung backend request block the UI forever
 });
 
 api.interceptors.request.use((config) => {
@@ -25,7 +26,7 @@ let refreshPromise: Promise<string | null> | null = null;
 function refreshAccessToken(): Promise<string | null> {
   if (!refreshPromise) {
     refreshPromise = axios
-      .post(`${API_BASE_URL}/api/auth/refresh`, {}, { withCredentials: true })
+      .post(`${API_BASE_URL}/api/auth/refresh`, {}, { withCredentials: true, timeout: 10000 })
       .then((res) => res.data?.data?.accessToken as string | undefined)
       .then((token) => token ?? null)
       .catch(() => null)
