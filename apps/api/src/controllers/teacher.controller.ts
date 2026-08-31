@@ -696,3 +696,176 @@ export async function getFeeDefaulters(req: AuthRequest, res: Response): Promise
     })),
   });
 }
+
+// =================================================================
+// Monthly Report
+// =================================================================
+
+function monthRange(monthYear: string): { start: Date; end: Date } {
+  const [y, m] = monthYear.split('-').map(Number);
+  const start = new Date(y, (m || 1) - 1, 1);
+  const end = new Date(y, m || 1, 1);
+  return { start, end };
+}
+
+async function computeReportStats(
+  teacherId: string,
+  monthYear: string
+): Promise<{ activitiesCount: number; attendanceRate: number; studentsInClasses: number }> {
+  const { start, end } = monthRange(monthYear);
+
+  const [activitiesCount, attendanceRecords, classes] = await Promise.all([
+    prisma.activity.count({
+      where: { subject: { teacherId }, createdAt: { gte: start, lt: end } },
+    }),
+    prisma.attendance.findMany({
+      where: { subject: { teacherId }, date: { gte: start, lt: end } },
+      select: { status: true },
+    }),
+    prisma.class.findMany({
+      where: { OR: [{ subjects: { some: { teacherId } } }, { classTeacherId: teacherId }] },
+      select: { id: true },
+    }),
+  ]);
+
+  const attendanceRate =
+    attendanceRecords.length > 0
+      ? (attendanceRecords.filter((a) => a.status === 'present').length / attendanceRecords.length) * 100
+      : 0;
+
+  const studentsInClasses =
+    classes.length > 0
+      ? await prisma.studentProfile.count({ where: { classId: { in: classes.map((c) => c.id) } } })
+      : 0;
+
+  return { activitiesCount, attendanceRate: Math.round(attendanceRate), studentsInClasses };
+}
+
+/** Finds the coordinator(s) covering a teacher's wing, for notifications. */
+async function findWingCoordinators(schoolId: string, teacherWing: string) {
+  return prisma.user.findMany({
+    where: {
+      schoolId,
+      role: 'coordinator',
+      teacherProfile: {
+        coordinatorWing: teacherWing === 'both' ? undefined : (teacherWing as 'junior' | 'senior'),
+      },
+    },
+  });
+}
+
+// GET /api/teacher/monthly-report/:monthYear
+export async function getMonthlyReport(req: AuthRequest, res: Response): Promise<void> {
+  const teacherId = req.user!.userId;
+  const { monthYear } = req.params;
+
+  const [report, stats] = await Promise.all([
+    prisma.monthlyReport.findUnique({ where: { teacherId_monthYear: { teacherId, monthYear } } }),
+    computeReportStats(teacherId, monthYear),
+  ]);
+
+  send(res, 200, { report, stats });
+}
+
+const upsertReportSchema = z.object({
+  monthYear: z.string().min(1).max(20),
+  studentPerformanceSummary: z.string().max(2000).optional(),
+  challengesFaced: z.string().max(2000).optional(),
+  plansNextMonth: z.string().max(2000).optional(),
+});
+
+// POST /api/teacher/monthly-report
+export async function upsertMonthlyReport(req: AuthRequest, res: Response): Promise<void> {
+  const teacherId = req.user!.userId;
+  const schoolId = req.user!.schoolId;
+  if (!schoolId) {
+    send(res, 403, undefined, 'No school assigned to this account');
+    return;
+  }
+
+  const parsed = upsertReportSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid monthly report data');
+    return;
+  }
+  const { monthYear, studentPerformanceSummary, challengesFaced, plansNextMonth } = parsed.data;
+
+  const stats = await computeReportStats(teacherId, monthYear);
+
+  const report = await prisma.monthlyReport.upsert({
+    where: { teacherId_monthYear: { teacherId, monthYear } },
+    update: {
+      activitiesCount: stats.activitiesCount,
+      attendanceRate: stats.attendanceRate,
+      studentPerformanceSummary,
+      challengesFaced,
+      plansNextMonth,
+      status: 'draft',
+    },
+    create: {
+      teacherId,
+      schoolId,
+      monthYear,
+      activitiesCount: stats.activitiesCount,
+      attendanceRate: stats.attendanceRate,
+      studentPerformanceSummary,
+      challengesFaced,
+      plansNextMonth,
+      status: 'draft',
+    },
+  });
+
+  await auditLog({
+    userId: teacherId,
+    action: 'MONTHLY_REPORT_SAVE',
+    targetTable: 'MonthlyReport',
+    targetId: report.id,
+    meta: { monthYear },
+    ip: req.ip,
+  });
+
+  send(res, 200, { report, stats });
+}
+
+// PATCH /api/teacher/monthly-report/:id/submit
+export async function submitMonthlyReport(req: AuthRequest, res: Response): Promise<void> {
+  const teacherId = req.user!.userId;
+  const schoolId = req.user!.schoolId;
+
+  const existing = await prisma.monthlyReport.findFirst({ where: { id: req.params.id, teacherId } });
+  if (!existing) {
+    send(res, 404, undefined, 'Monthly report not found');
+    return;
+  }
+
+  const report = await prisma.monthlyReport.update({
+    where: { id: existing.id },
+    data: { status: 'submitted' },
+  });
+
+  if (schoolId) {
+    const teacherProfile = await prisma.teacherProfile.findUnique({ where: { userId: teacherId } });
+    if (teacherProfile) {
+      const coordinators = await findWingCoordinators(schoolId, teacherProfile.wing);
+      if (coordinators.length > 0) {
+        await prisma.notification.createMany({
+          data: coordinators.map((c) => ({
+            userId: c.id,
+            type: 'MONTHLY_REPORT_SUBMITTED',
+            message: `A monthly report for ${report.monthYear} was submitted and needs review.`,
+          })),
+        });
+      }
+    }
+  }
+
+  await auditLog({
+    userId: teacherId,
+    action: 'MONTHLY_REPORT_SUBMIT',
+    targetTable: 'MonthlyReport',
+    targetId: report.id,
+    ip: req.ip,
+  });
+
+  send(res, 200, report);
+}

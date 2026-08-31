@@ -15,6 +15,7 @@ const NAV_ITEMS = [
   { href: '/teacher/attendance', label: 'Attendance' },
   { href: '/teacher/classes', label: 'My Classes' },
   { href: '/teacher/announcements', label: 'Announcements' },
+  { href: '/teacher/monthly-report', label: 'Monthly Report' },
 ];
 
 export default function TeacherLayout({ children }: { children: ReactNode }) {

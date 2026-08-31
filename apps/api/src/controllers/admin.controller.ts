@@ -411,7 +411,9 @@ export async function getTeachers(req: AuthRequest, res: Response): Promise<void
   if (!schoolId) return;
 
   const teachers = await prisma.user.findMany({
-    where: { schoolId, role: 'teacher' },
+    // Coordinators are teachers with an elevated role — keep them visible
+    // here too, so admin can still manage/demote them.
+    where: { schoolId, role: { in: ['teacher', 'coordinator'] } },
     include: {
       teachingSubjects: { select: { id: true, name: true, classId: true } },
       teacherProfile: true,
@@ -1429,6 +1431,180 @@ export async function linkParentChildren(req: AuthRequest, res: Response): Promi
   });
 
   send(res, 200, { message: 'Children linked' });
+}
+
+// =================================================================
+// Coordinator assignment
+// PATCH /api/admin/teachers/:id/coordinator
+// =================================================================
+
+const assignCoordinatorSchema = z.object({
+  isCoordinator: z.boolean(),
+  coordinatorWing: z.enum(['junior', 'senior']).nullable(),
+});
+
+export async function assignCoordinator(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = assignCoordinatorSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid coordinator assignment data');
+    return;
+  }
+  const { isCoordinator, coordinatorWing } = parsed.data;
+
+  if (isCoordinator && !coordinatorWing) {
+    send(res, 400, undefined, 'coordinatorWing is required when assigning a coordinator');
+    return;
+  }
+
+  const { id } = req.params;
+  const existing = await prisma.user.findFirst({
+    where: { id, schoolId, role: { in: ['teacher', 'coordinator'] } },
+    include: { teacherProfile: true },
+  });
+  if (!existing || !existing.teacherProfile) {
+    send(res, 404, undefined, 'Teacher not found');
+    return;
+  }
+
+  const [user] = await prisma.$transaction([
+    prisma.user.update({
+      where: { id },
+      data: { role: isCoordinator ? 'coordinator' : 'teacher' },
+    }),
+    prisma.teacherProfile.update({
+      where: { id: existing.teacherProfile.id },
+      data: { isCoordinator, coordinatorWing: isCoordinator ? coordinatorWing : null },
+    }),
+  ]);
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'ASSIGN_COORDINATOR',
+    targetTable: 'User',
+    targetId: id,
+    meta: { isCoordinator, coordinatorWing },
+    ip: req.ip,
+  });
+
+  if (isCoordinator) {
+    try {
+      const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } });
+      await sendWelcomeEmail({
+        name: existing.name,
+        email: existing.email,
+        role: 'coordinator',
+        schoolName: school?.name ?? 'your school',
+      });
+    } catch (err) {
+      console.warn('[assignCoordinator] Welcome email failed:', err);
+    }
+  }
+
+  send(res, 200, stripPassword(user));
+}
+
+// =================================================================
+// Wing Reports (submitted by coordinators, reviewed by admin)
+// =================================================================
+
+export async function getWingReports(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const reports = await prisma.wingReport.findMany({
+    where: { schoolId },
+    include: { coordinator: { select: { id: true, name: true, email: true } } },
+    orderBy: { submittedAt: 'desc' },
+  });
+
+  send(res, 200, { reports });
+}
+
+const wingReportDecisionSchema = z.object({
+  adminComment: z.string().max(1000).optional(),
+});
+
+export async function approveWingReport(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = wingReportDecisionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid input');
+    return;
+  }
+
+  const existing = await prisma.wingReport.findFirst({ where: { id: req.params.id, schoolId } });
+  if (!existing) {
+    send(res, 404, undefined, 'Wing report not found');
+    return;
+  }
+
+  const report = await prisma.wingReport.update({
+    where: { id: existing.id },
+    data: { status: 'approved', adminComment: parsed.data.adminComment, approvedAt: new Date() },
+  });
+
+  await prisma.notification.create({
+    data: {
+      userId: existing.coordinatorId,
+      type: 'WING_REPORT_APPROVED',
+      message: `Your wing report for ${existing.monthYear} has been approved.`,
+    },
+  });
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'WING_REPORT_APPROVE',
+    targetTable: 'WingReport',
+    targetId: report.id,
+    ip: req.ip,
+  });
+
+  send(res, 200, report);
+}
+
+export async function rejectWingReport(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = wingReportDecisionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid input');
+    return;
+  }
+
+  const existing = await prisma.wingReport.findFirst({ where: { id: req.params.id, schoolId } });
+  if (!existing) {
+    send(res, 404, undefined, 'Wing report not found');
+    return;
+  }
+
+  const report = await prisma.wingReport.update({
+    where: { id: existing.id },
+    data: { status: 'rejected', adminComment: parsed.data.adminComment },
+  });
+
+  await prisma.notification.create({
+    data: {
+      userId: existing.coordinatorId,
+      type: 'WING_REPORT_REJECTED',
+      message: `Your wing report for ${existing.monthYear} needs changes — see admin comments.`,
+    },
+  });
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'WING_REPORT_REJECT',
+    targetTable: 'WingReport',
+    targetId: report.id,
+    ip: req.ip,
+  });
+
+  send(res, 200, report);
 }
 
 // =================================================================

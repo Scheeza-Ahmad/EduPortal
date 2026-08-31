@@ -1,7 +1,7 @@
 import { sendEmail } from '../utils/mailer';
 import { emailLayout, emailSection, emailStat } from '../utils/emailTemplate';
 
-type WelcomeRole = 'school_admin' | 'teacher' | 'student' | 'parent' | 'finance';
+type WelcomeRole = 'school_admin' | 'teacher' | 'student' | 'parent' | 'finance' | 'coordinator';
 
 const ROLE_LABELS: Record<WelcomeRole, string> = {
   school_admin: 'School Administrator',
@@ -9,6 +9,7 @@ const ROLE_LABELS: Record<WelcomeRole, string> = {
   student: 'Student',
   parent: 'Parent',
   finance: 'Finance Officer',
+  coordinator: 'Wing Coordinator',
 };
 
 const GETTING_STARTED_TIPS: Record<WelcomeRole, string> = {
@@ -17,6 +18,7 @@ const GETTING_STARTED_TIPS: Record<WelcomeRole, string> = {
   student: 'View your timetable and upcoming assignments.',
   parent: "Monitor your child's progress and attendance.",
   finance: 'Set up fee structures and start tracking payments.',
+  coordinator: "Review your wing's teacher activity and monthly reports from your dashboard.",
 };
 
 interface SendWelcomeEmailInput {

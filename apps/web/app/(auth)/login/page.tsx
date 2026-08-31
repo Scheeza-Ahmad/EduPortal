@@ -22,6 +22,7 @@ const ROLE_HOME: Record<string, string> = {
   student: '/student',
   parent: '/parent',
   finance: '/finance',
+  coordinator: '/coordinator',
 };
 
 const FEATURES = [

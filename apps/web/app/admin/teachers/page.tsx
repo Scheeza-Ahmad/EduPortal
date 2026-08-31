@@ -47,8 +47,14 @@ interface Teacher {
   name: string;
   email: string;
   isActive: boolean;
+  role: string;
   teachingSubjects: { id: string; name: string; classId: string }[];
-  teacherProfile: { wing: Wing; isClassTeacher: boolean } | null;
+  teacherProfile: {
+    wing: Wing;
+    isClassTeacher: boolean;
+    isCoordinator: boolean;
+    coordinatorWing: 'junior' | 'senior' | null;
+  } | null;
 }
 
 interface TeacherForm {
@@ -81,6 +87,12 @@ export default function TeachersPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+
+  const [coordinatorTarget, setCoordinatorTarget] = useState<Teacher | null>(null);
+  const [coordinatorWing, setCoordinatorWing] = useState<'junior' | 'senior' | ''>('');
+  const [coordinatorError, setCoordinatorError] = useState<string | null>(null);
+  const [coordinatorSubmitting, setCoordinatorSubmitting] = useState(false);
+  const [removeCoordinatorTarget, setRemoveCoordinatorTarget] = useState<Teacher | null>(null);
 
   async function loadSubjects() {
     try {
@@ -191,6 +203,49 @@ export default function TeachersPage() {
     }
   }
 
+  function openCoordinatorDialog(teacher: Teacher) {
+    setCoordinatorTarget(teacher);
+    setCoordinatorWing('');
+    setCoordinatorError(null);
+  }
+
+  async function handleAssignCoordinator(e: FormEvent) {
+    e.preventDefault();
+    if (!coordinatorTarget || !coordinatorWing) return;
+    setCoordinatorError(null);
+    setCoordinatorSubmitting(true);
+    try {
+      await api.patch(`/api/admin/teachers/${coordinatorTarget.id}/coordinator`, {
+        isCoordinator: true,
+        coordinatorWing,
+      });
+      setCoordinatorTarget(null);
+      await loadTeachers();
+    } catch (err) {
+      const axiosErr = err as AxiosError<{ error?: string }>;
+      setCoordinatorError(axiosErr.response?.data?.error ?? 'Failed to assign coordinator.');
+    } finally {
+      setCoordinatorSubmitting(false);
+    }
+  }
+
+  async function handleRemoveCoordinator() {
+    if (!removeCoordinatorTarget) return;
+    setCoordinatorSubmitting(true);
+    try {
+      await api.patch(`/api/admin/teachers/${removeCoordinatorTarget.id}/coordinator`, {
+        isCoordinator: false,
+        coordinatorWing: null,
+      });
+      setRemoveCoordinatorTarget(null);
+      await loadTeachers();
+    } catch {
+      setError('Failed to remove coordinator role.');
+    } finally {
+      setCoordinatorSubmitting(false);
+    }
+  }
+
   function teachersInWing(wing: Wing): Teacher[] {
     return teachers.filter((t) => t.teacherProfile?.wing === wing);
   }
@@ -233,15 +288,35 @@ export default function TeachersPage() {
                   </div>
                 </TableCell>
                 <TableCell>
-                  <Badge variant={teacher.isActive ? 'default' : 'secondary'}>
-                    {teacher.isActive ? 'Active' : 'Inactive'}
-                  </Badge>
+                  <div className="flex flex-wrap gap-1">
+                    <Badge variant={teacher.isActive ? 'default' : 'secondary'}>
+                      {teacher.isActive ? 'Active' : 'Inactive'}
+                    </Badge>
+                    {teacher.teacherProfile?.isCoordinator && (
+                      <Badge variant="outline" className="bg-indigo-100 text-indigo-800">
+                        Coordinator ({teacher.teacherProfile.coordinatorWing})
+                      </Badge>
+                    )}
+                  </div>
                 </TableCell>
                 <TableCell className="text-right">
                   <div className="flex flex-wrap justify-end gap-2">
                     <Button variant="outline" size="sm" onClick={() => openEditDialog(teacher)}>
                       Edit
                     </Button>
+                    {teacher.teacherProfile?.isCoordinator ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setRemoveCoordinatorTarget(teacher)}
+                      >
+                        Remove Coordinator
+                      </Button>
+                    ) : (
+                      <Button variant="outline" size="sm" onClick={() => openCoordinatorDialog(teacher)}>
+                        Make Coordinator
+                      </Button>
+                    )}
                     {teacher.isActive && (
                       <Button
                         variant="destructive"
@@ -423,6 +498,61 @@ export default function TeachersPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(coordinatorTarget)} onOpenChange={(open) => !open && setCoordinatorTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Assign as Wing Coordinator</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleAssignCoordinator} className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              {coordinatorTarget?.name} will be given coordinator access for the selected wing.
+            </p>
+            <div className="space-y-2">
+              <Label>Wing</Label>
+              <Select value={coordinatorWing} onValueChange={(v) => setCoordinatorWing(v as 'junior' | 'senior')}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a wing" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="junior">Junior Wing (1-5)</SelectItem>
+                  <SelectItem value="senior">Senior Wing (6-10)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {coordinatorError && (
+              <p className="text-sm text-destructive" role="alert">
+                {coordinatorError}
+              </p>
+            )}
+            <DialogFooter>
+              <Button type="submit" disabled={!coordinatorWing || coordinatorSubmitting}>
+                {coordinatorSubmitting ? 'Assigning...' : 'Assign as Coordinator'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(removeCoordinatorTarget)}
+        onOpenChange={(open) => !open && setRemoveCoordinatorTarget(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove Coordinator Role</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            {removeCoordinatorTarget?.name} will lose coordinator access and return to a regular teacher
+            role. This can&apos;t be undone automatically — you&apos;ll need to reassign them if needed.
+          </p>
+          <DialogFooter>
+            <Button variant="destructive" disabled={coordinatorSubmitting} onClick={handleRemoveCoordinator}>
+              {coordinatorSubmitting ? 'Removing...' : 'Remove Coordinator'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

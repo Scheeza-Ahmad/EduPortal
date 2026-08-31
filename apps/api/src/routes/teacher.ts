@@ -12,6 +12,7 @@ import {
   getAttendanceReport,
   getDashboard,
   getFeeDefaulters,
+  getMonthlyReport,
   getMyClassAnnouncements,
   getMyClasses,
   getMySubjects,
@@ -20,7 +21,9 @@ import {
   gradeSubmission,
   markAttendance,
   publishActivity,
+  submitMonthlyReport,
   updateActivity,
+  upsertMonthlyReport,
 } from '../controllers/teacher.controller';
 
 const router = Router();
@@ -29,6 +32,11 @@ router.use(verifyToken, requireRole('teacher'));
 
 router.get('/dashboard', getDashboard);
 router.get('/fee-defaulters', getFeeDefaulters);
+
+// Monthly report
+router.get('/monthly-report/:monthYear', getMonthlyReport);
+router.post('/monthly-report', upsertMonthlyReport);
+router.patch('/monthly-report/:id/submit', submitMonthlyReport);
 
 // Activities — /reuse must come before /:id so it isn't swallowed as an id.
 router.get('/activities/reuse', getReusableActivities);

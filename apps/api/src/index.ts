@@ -11,6 +11,7 @@ import teacherRoutes from './routes/teacher';
 import studentRoutes from './routes/student';
 import parentRoutes from './routes/parent';
 import financeRoutes from './routes/finance';
+import coordinatorRoutes from './routes/coordinator';
 import { errorHandler } from './middleware/errorHandler';
 import { startJobs } from './jobs';
 
@@ -46,6 +47,7 @@ app.use('/api/teacher', teacherRoutes);
 app.use('/api/student', studentRoutes);
 app.use('/api/parent', parentRoutes);
 app.use('/api/finance', financeRoutes);
+app.use('/api/coordinator', coordinatorRoutes);
 
 app.use(errorHandler);
 

@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { verifyToken } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import {
+  approveWingReport,
+  assignCoordinator,
   bulkImportStudents,
   checkTimetableConflict,
   createAnnouncement,
@@ -29,7 +31,9 @@ import {
   getSubjects,
   getTeachers,
   getTimetableForClass,
+  getWingReports,
   linkParentChildren,
+  rejectWingReport,
   updateClass,
   updateStudent,
   updateSubject,
@@ -55,6 +59,7 @@ router.get('/teachers', getTeachers);
 router.post('/teachers', createTeacher);
 router.patch('/teachers/:id', updateTeacher);
 router.delete('/teachers/:id', deleteTeacher);
+router.patch('/teachers/:id/coordinator', assignCoordinator);
 
 // Classes
 router.get('/classes', getClasses);
@@ -95,5 +100,10 @@ router.patch('/parents/:id/children', linkParentChildren);
 
 // Finance user management
 router.post('/finance/create-user', createFinanceUser);
+
+// Wing reports (submitted by coordinators)
+router.get('/wing-reports', getWingReports);
+router.patch('/wing-reports/:id/approve', approveWingReport);
+router.patch('/wing-reports/:id/reject', rejectWingReport);
 
 export default router;

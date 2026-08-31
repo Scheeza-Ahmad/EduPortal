@@ -102,6 +102,10 @@ model User {
   studentFees  StudentFee[] @relation("StudentFees")
   recordedFees FeePayment[] @relation("FeePayments")
 
+  teacherReports     MonthlyReport[] @relation("TeacherReports")
+  coordinatorReviews MonthlyReport[] @relation("CoordinatorReviews")
+  wingReports        WingReport[]    @relation("CoordinatorWingReports")
+
   @@index([schoolId])
   @@index([role])
 }
@@ -164,6 +168,9 @@ model School {
   lateFeeRule      LateFeeRule?
   feeStructures    FeeStructure[]
   financeReports   FinanceReport[]
+
+  monthlyReports MonthlyReport[]
+  wingReports    WingReport[]
 
   @@index([adminId])
 }
@@ -601,4 +608,73 @@ model FinanceReport {
 
   @@unique([schoolId, monthYear])
   @@index([schoolId])
+}
+
+// ---------------------------------------------------------------
+// Coordinator module
+// ---------------------------------------------------------------
+
+enum ReportStatus {
+  draft
+  submitted
+  reviewed
+  forwarded
+  approved
+  rejected
+}
+
+model MonthlyReport {
+  id                        String       @id @default(cuid())
+  teacherId                 String
+  schoolId                  String
+  monthYear                 String // "2026-09"
+  activitiesCount           Int          @default(0)
+  attendanceRate            Float        @default(0)
+  studentPerformanceSummary String?
+  challengesFaced           String?
+  plansNextMonth            String?
+  status                    ReportStatus @default(draft)
+  coordinatorComment        String?
+  coordinatorReviewedAt     DateTime?
+  coordinatorId             String?
+  adminComment              String?
+  adminApprovedAt           DateTime?
+  createdAt                 DateTime     @default(now())
+  updatedAt                 DateTime     @updatedAt
+
+  teacher     User   @relation("TeacherReports", fields: [teacherId], references: [id])
+  school      School @relation(fields: [schoolId], references: [id])
+  coordinator User?  @relation("CoordinatorReviews", fields: [coordinatorId], references: [id])
+
+  @@unique([teacherId, monthYear])
+  @@index([schoolId])
+  @@index([teacherId])
+  @@index([status])
+}
+
+// A coordinator's wing-wide monthly summary submitted to the school admin —
+// distinct from MonthlyReport (one per teacher). Not in the original spec's
+// schema step; added because STEP 7 requires a listable, approvable entity.
+model WingReport {
+  id            String       @id @default(cuid())
+  schoolId      String
+  coordinatorId String
+  wing          Wing
+  monthYear     String
+  summary       Json // auto-generated wing stats snapshot
+  notes         String? // coordinator's notes/recommendations
+  status        ReportStatus @default(submitted)
+  adminComment  String?
+  submittedAt   DateTime     @default(now())
+  approvedAt    DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  school      School @relation(fields: [schoolId], references: [id])
+  coordinator User   @relation("CoordinatorWingReports", fields: [coordinatorId], references: [id])
+
+  @@unique([schoolId, wing, monthYear])
+  @@index([schoolId])
+  @@index([coordinatorId])
+  @@index([status])
 }
