@@ -4,6 +4,9 @@ import { startStorageWarning } from './storageWarning';
 import { startDueDateLock } from './dueDateLock';
 import { startUngradedReminder } from './ungradedReminder';
 import { startPerformanceSnapshot } from './performanceSnapshot';
+import { startDueDateReminder } from './dueDateReminder';
+import { startWeeklyDigest } from './weeklyDigest';
+import { startMonthlyProgress } from './monthlyProgress';
 
 export function startJobs(): void {
   startWeeklyBackup();
@@ -12,7 +15,10 @@ export function startJobs(): void {
   startDueDateLock();
   startUngradedReminder();
   startPerformanceSnapshot();
+  startDueDateReminder();
+  startWeeklyDigest();
+  startMonthlyProgress();
   console.log(
-    'Cron jobs registered: weeklyBackup, monthlyReport, storageWarning, dueDateLock, ungradedReminder, performanceSnapshot'
+    'Cron jobs registered: weeklyBackup, monthlyReport, storageWarning, dueDateLock, ungradedReminder, performanceSnapshot, dueDateReminder, weeklyDigest, monthlyProgress'
   );
 }

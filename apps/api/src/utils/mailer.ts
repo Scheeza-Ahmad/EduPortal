@@ -4,9 +4,10 @@ interface SendEmailInput {
   to: string;
   subject: string;
   html: string;
+  attachments?: { filename: string; content: Buffer }[];
 }
 
-export async function sendEmail({ to, subject, html }: SendEmailInput): Promise<void> {
+export async function sendEmail({ to, subject, html, attachments }: SendEmailInput): Promise<void> {
   const apiKey = process.env.RESEND_API_KEY;
 
   if (!apiKey) {
@@ -17,7 +18,7 @@ export async function sendEmail({ to, subject, html }: SendEmailInput): Promise<
   const resend = new Resend(apiKey);
   const from = process.env.EMAIL_FROM ?? 'onboarding@resend.dev';
 
-  const { error } = await resend.emails.send({ from, to, subject, html });
+  const { error } = await resend.emails.send({ from, to, subject, html, attachments });
 
   if (error) {
     throw new Error(`Failed to send email: ${error.message}`);

@@ -17,15 +17,18 @@ import {
   deleteSubject,
   deleteTeacher,
   deleteTimetableSlot,
+  createParent,
   getAnnouncements,
   getCalendar,
   getClasses,
+  getParents,
   getReportCard,
   getStats,
   getStudents,
   getSubjects,
   getTeachers,
   getTimetableForClass,
+  linkParentChildren,
   updateClass,
   updateStudent,
   updateSubject,
@@ -83,5 +86,10 @@ router.get('/report-cards/:studentId', getReportCard);
 router.get('/calendar', getCalendar);
 router.post('/calendar', createCalendarDate);
 router.delete('/calendar/:id', deleteCalendarDate);
+
+// Parents
+router.get('/parents', getParents);
+router.post('/parents', createParent);
+router.patch('/parents/:id/children', linkParentChildren);
 
 export default router;

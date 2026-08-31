@@ -5,6 +5,9 @@ import { send } from '../utils/response';
 import { auditLog } from '../utils/audit';
 import { AuthRequest } from '../middleware/auth';
 import { checkAbsenceStreak } from '../jobs/absenceStreak';
+import { notifyParentOfAbsence } from '../jobs/absenceNotify';
+import { checkLowGrade } from '../jobs/lowGradeAlert';
+import { checkTopOfClass } from '../jobs/badgeAward';
 
 // ---------------------------------------------------------------
 // Shared helpers
@@ -353,6 +356,16 @@ export async function gradeSubmission(req: AuthRequest, res: Response): Promise<
     ip: req.ip,
   });
 
+  // Sync checks — non-fatal if either fails.
+  try {
+    await Promise.all([
+      checkLowGrade(submission.studentId, marks, submission.activity.totalMarks),
+      checkTopOfClass(submission.activityId, submission.studentId),
+    ]);
+  } catch (err) {
+    console.warn('[gradeSubmission] Post-grade checks failed:', err);
+  }
+
   send(res, 200, grade);
 }
 
@@ -456,11 +469,12 @@ export async function markAttendance(req: AuthRequest, res: Response): Promise<v
     ip: req.ip,
   });
 
-  // Sync check: 3-day absence streak -> email teacher + notify parent.
+  // Sync checks: 3-day absence streak -> email teacher; instant absence -> notify parent.
   const absentStudentIds = records.filter((r) => r.status === 'absent').map((r) => r.studentId);
-  await Promise.all(
-    absentStudentIds.map((studentId) => checkAbsenceStreak(studentId, subjectId, teacherId))
-  );
+  await Promise.all([
+    ...absentStudentIds.map((studentId) => checkAbsenceStreak(studentId, subjectId, teacherId)),
+    ...absentStudentIds.map((studentId) => notifyParentOfAbsence(studentId, subjectId)),
+  ]);
 
   send(res, 200, { message: 'Attendance marked' });
 }

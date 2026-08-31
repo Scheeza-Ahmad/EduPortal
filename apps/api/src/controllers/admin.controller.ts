@@ -1247,3 +1247,146 @@ export async function deleteCalendarDate(req: AuthRequest, res: Response): Promi
 
   send(res, 200, { message: 'Calendar entry removed' });
 }
+
+// =================================================================
+// 10. Parent Management
+// Not part of the original 9 resource groups — added as a prerequisite for
+// the Parent module, since there was previously no way to create a parent
+// account or link one to a student at all.
+// =================================================================
+
+export async function getParents(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parents = await prisma.user.findMany({
+    where: { schoolId, role: 'parent' },
+    include: {
+      parentProfile: {
+        include: { children: { include: { user: { select: { id: true, name: true } } } } },
+      },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  send(res, 200, { parents: parents.map(stripPassword) });
+}
+
+const createParentSchema = z.object({
+  name: z.string().min(1),
+  email: z.string().email(),
+  password: z.string().min(8),
+  studentIds: z.array(z.string()).optional(), // StudentProfile ids to link
+});
+
+export async function createParent(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = createParentSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid parent data');
+    return;
+  }
+  const { name, email, password, studentIds } = parsed.data;
+
+  if (studentIds && studentIds.length > 0) {
+    const validCount = await prisma.studentProfile.count({
+      where: { id: { in: studentIds }, class: { schoolId } },
+    });
+    if (validCount !== studentIds.length) {
+      send(res, 400, undefined, 'One or more students not found in this school');
+      return;
+    }
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 12);
+
+  try {
+    const user = await prisma.user.create({
+      data: {
+        name,
+        email,
+        password: hashedPassword,
+        role: 'parent',
+        schoolId,
+        parentProfile: { create: {} },
+      },
+      include: { parentProfile: true },
+    });
+
+    if (studentIds && studentIds.length > 0 && user.parentProfile) {
+      await prisma.studentProfile.updateMany({
+        where: { id: { in: studentIds } },
+        data: { parentId: user.parentProfile.id },
+      });
+    }
+
+    await auditLog({
+      userId: req.user!.userId,
+      action: 'PARENT_CREATE',
+      targetTable: 'User',
+      targetId: user.id,
+      meta: { email, studentIds },
+      ip: req.ip,
+    });
+
+    send(res, 201, stripPassword(user));
+  } catch (err) {
+    if (isUniqueConstraintError(err)) {
+      send(res, 400, undefined, 'Email already in use');
+      return;
+    }
+    throw err;
+  }
+}
+
+const linkChildrenSchema = z.object({
+  studentIds: z.array(z.string()).min(1),
+});
+
+export async function linkParentChildren(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = linkChildrenSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid input');
+    return;
+  }
+  const { id } = req.params; // parent's User.id
+  const { studentIds } = parsed.data;
+
+  const parent = await prisma.user.findFirst({
+    where: { id, schoolId, role: 'parent' },
+    include: { parentProfile: true },
+  });
+  if (!parent || !parent.parentProfile) {
+    send(res, 404, undefined, 'Parent not found');
+    return;
+  }
+
+  const validCount = await prisma.studentProfile.count({
+    where: { id: { in: studentIds }, class: { schoolId } },
+  });
+  if (validCount !== studentIds.length) {
+    send(res, 400, undefined, 'One or more students not found in this school');
+    return;
+  }
+
+  await prisma.studentProfile.updateMany({
+    where: { id: { in: studentIds } },
+    data: { parentId: parent.parentProfile.id },
+  });
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'PARENT_LINK_CHILDREN',
+    targetTable: 'User',
+    targetId: id,
+    meta: { studentIds },
+    ip: req.ip,
+  });
+
+  send(res, 200, { message: 'Children linked' });
+}

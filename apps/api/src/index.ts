@@ -8,6 +8,8 @@ import authRoutes from './routes/auth';
 import superRoutes from './routes/super';
 import adminRoutes from './routes/admin';
 import teacherRoutes from './routes/teacher';
+import studentRoutes from './routes/student';
+import parentRoutes from './routes/parent';
 import { errorHandler } from './middleware/errorHandler';
 import { startJobs } from './jobs';
 
@@ -40,6 +42,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/super', superRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/teacher', teacherRoutes);
+app.use('/api/student', studentRoutes);
+app.use('/api/parent', parentRoutes);
 
 app.use(errorHandler);
 
