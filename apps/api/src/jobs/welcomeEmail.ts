@@ -1,13 +1,14 @@
 import { sendEmail } from '../utils/mailer';
 import { emailLayout, emailSection, emailStat } from '../utils/emailTemplate';
 
-type WelcomeRole = 'school_admin' | 'teacher' | 'student' | 'parent';
+type WelcomeRole = 'school_admin' | 'teacher' | 'student' | 'parent' | 'finance';
 
 const ROLE_LABELS: Record<WelcomeRole, string> = {
   school_admin: 'School Administrator',
   teacher: 'Teacher',
   student: 'Student',
   parent: 'Parent',
+  finance: 'Finance Officer',
 };
 
 const GETTING_STARTED_TIPS: Record<WelcomeRole, string> = {
@@ -15,6 +16,7 @@ const GETTING_STARTED_TIPS: Record<WelcomeRole, string> = {
   teacher: 'Check your assigned subjects and create activities.',
   student: 'View your timetable and upcoming assignments.',
   parent: "Monitor your child's progress and attendance.",
+  finance: 'Set up fee structures and start tracking payments.',
 };
 
 interface SendWelcomeEmailInput {

@@ -19,6 +19,7 @@ const NAV_ITEMS = [
   { href: '/admin/announcements', label: 'Announcements' },
   { href: '/admin/report-cards', label: 'Report Cards' },
   { href: '/admin/calendar', label: 'Calendar' },
+  { href: '/finance', label: 'Finance' },
 ];
 
 export default function AdminLayout({ children }: { children: ReactNode }) {

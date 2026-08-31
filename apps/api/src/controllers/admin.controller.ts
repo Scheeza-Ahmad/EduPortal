@@ -1430,3 +1430,64 @@ export async function linkParentChildren(req: AuthRequest, res: Response): Promi
 
   send(res, 200, { message: 'Children linked' });
 }
+
+// =================================================================
+// 10. Finance User Management
+// POST /api/admin/finance/create-user
+// =================================================================
+
+const createFinanceUserSchema = z.object({
+  name: z.string().min(1).max(120),
+  email: z.string().email(),
+  password: z.string().min(8),
+});
+
+export async function createFinanceUser(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = createFinanceUserSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid finance user data');
+    return;
+  }
+  const { name, email, password } = parsed.data;
+
+  const hashedPassword = await bcrypt.hash(password, 12);
+
+  try {
+    const user = await prisma.user.create({
+      data: { name, email, password: hashedPassword, role: 'finance', schoolId },
+    });
+
+    await auditLog({
+      userId: req.user!.userId,
+      action: 'FINANCE_USER_CREATE',
+      targetTable: 'User',
+      targetId: user.id,
+      meta: { email },
+      ip: req.ip,
+    });
+
+    try {
+      const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } });
+      await sendWelcomeEmail({
+        name,
+        email,
+        role: 'finance',
+        schoolName: school?.name ?? 'your school',
+        password,
+      });
+    } catch (err) {
+      console.warn('[createFinanceUser] Welcome email failed:', err);
+    }
+
+    send(res, 201, stripPassword(user));
+  } catch (err) {
+    if (isUniqueConstraintError(err)) {
+      send(res, 400, undefined, 'Email already in use');
+      return;
+    }
+    throw err;
+  }
+}

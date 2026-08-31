@@ -7,6 +7,7 @@ import {
   createAnnouncement,
   createCalendarDate,
   createClass,
+  createFinanceUser,
   createStudent,
   createSubject,
   createTeacher,
@@ -91,5 +92,8 @@ router.delete('/calendar/:id', deleteCalendarDate);
 router.get('/parents', getParents);
 router.post('/parents', createParent);
 router.patch('/parents/:id/children', linkParentChildren);
+
+// Finance user management
+router.post('/finance/create-user', createFinanceUser);
 
 export default router;

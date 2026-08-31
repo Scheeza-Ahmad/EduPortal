@@ -10,6 +10,7 @@ import adminRoutes from './routes/admin';
 import teacherRoutes from './routes/teacher';
 import studentRoutes from './routes/student';
 import parentRoutes from './routes/parent';
+import financeRoutes from './routes/finance';
 import { errorHandler } from './middleware/errorHandler';
 import { startJobs } from './jobs';
 
@@ -44,6 +45,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/teacher', teacherRoutes);
 app.use('/api/student', studentRoutes);
 app.use('/api/parent', parentRoutes);
+app.use('/api/finance', financeRoutes);
 
 app.use(errorHandler);
 
