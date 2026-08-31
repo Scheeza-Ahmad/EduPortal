@@ -6,6 +6,7 @@ import { prisma } from '../utils/prisma';
 import { send } from '../utils/response';
 import { auditLog } from '../utils/audit';
 import { AuthRequest } from '../middleware/auth';
+import { sendWelcomeEmail } from '../jobs/welcomeEmail';
 
 // ---------------------------------------------------------------
 // Shared helpers
@@ -171,6 +172,19 @@ export async function createStudent(req: AuthRequest, res: Response): Promise<vo
       meta: { email, classId, rollNo },
       ip: req.ip,
     });
+
+    try {
+      const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } });
+      await sendWelcomeEmail({
+        name,
+        email,
+        role: 'student',
+        schoolName: school?.name ?? 'your school',
+        password,
+      });
+    } catch (err) {
+      console.warn('[createStudent] Welcome email failed:', err);
+    }
 
     send(res, 201, stripPassword(user));
   } catch (err) {
@@ -458,6 +472,19 @@ export async function createTeacher(req: AuthRequest, res: Response): Promise<vo
       meta: { email, wing, subjectIds },
       ip: req.ip,
     });
+
+    try {
+      const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } });
+      await sendWelcomeEmail({
+        name,
+        email,
+        role: 'teacher',
+        schoolName: school?.name ?? 'your school',
+        password,
+      });
+    } catch (err) {
+      console.warn('[createTeacher] Welcome email failed:', err);
+    }
 
     send(res, 201, stripPassword(user));
   } catch (err) {
@@ -1330,6 +1357,19 @@ export async function createParent(req: AuthRequest, res: Response): Promise<voi
       meta: { email, studentIds },
       ip: req.ip,
     });
+
+    try {
+      const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } });
+      await sendWelcomeEmail({
+        name,
+        email,
+        role: 'parent',
+        schoolName: school?.name ?? 'your school',
+        password,
+      });
+    } catch (err) {
+      console.warn('[createParent] Welcome email failed:', err);
+    }
 
     send(res, 201, stripPassword(user));
   } catch (err) {

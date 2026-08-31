@@ -7,10 +7,37 @@ import { prisma } from '../utils/prisma';
 import { send } from '../utils/response';
 import { sendEmail } from '../utils/mailer';
 import { AccessTokenPayload, AuthRequest } from '../middleware/auth';
+import { sendSuspiciousLoginAlert } from '../jobs/suspiciousLogin';
 
 const REFRESH_COOKIE_NAME = 'refreshToken';
 const REFRESH_COOKIE_PATH = '/api/auth';
 const OTP_EXPIRY_MINUTES = 10;
+
+// Failed-login tracker, keyed by IP. In-memory — resets on server restart,
+// which is fine for a brute-force *alert*, not a hard security boundary.
+const failedLoginAttempts = new Map<string, { count: number; firstAttempt: Date }>();
+const SUSPICIOUS_LOGIN_THRESHOLD = 3;
+const FAILED_ATTEMPT_WINDOW_MS = 15 * 60 * 1000; // matches the rate limiter window
+
+function recordFailedLogin(ip: string, attemptedEmail: string): void {
+  const now = new Date();
+  const existing = failedLoginAttempts.get(ip);
+
+  if (!existing || now.getTime() - existing.firstAttempt.getTime() > FAILED_ATTEMPT_WINDOW_MS) {
+    failedLoginAttempts.set(ip, { count: 1, firstAttempt: now });
+    return;
+  }
+
+  existing.count += 1;
+
+  if (existing.count >= SUSPICIOUS_LOGIN_THRESHOLD) {
+    const attempts = existing.count;
+    failedLoginAttempts.delete(ip); // reset counter after alerting
+    sendSuspiciousLoginAlert(ip, attemptedEmail, attempts).catch((err) =>
+      console.warn('[suspiciousLogin] Alert failed:', err)
+    );
+  }
+}
 
 function hashToken(raw: string): string {
   return crypto.createHash('sha256').update(raw).digest('hex');
@@ -79,6 +106,8 @@ export async function login(req: Request, res: Response): Promise<void> {
 
   const passwordMatches = await bcrypt.compare(password, user.password);
   if (!passwordMatches) {
+    const ip = req.ip || String(req.headers['x-forwarded-for'] ?? 'unknown');
+    recordFailedLogin(ip, email);
     send(res, 401, undefined, 'Invalid credentials');
     return;
   }

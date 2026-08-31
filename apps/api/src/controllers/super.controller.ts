@@ -8,6 +8,9 @@ import { auditLog } from '../utils/audit';
 import { sendEmail } from '../utils/mailer';
 import { AuthRequest } from '../middleware/auth';
 import { getStorageUsage } from '../utils/cloudinaryUsage';
+import { emailBadge, emailLayout, emailSection, emailStat } from '../utils/emailTemplate';
+import { sendWelcomeEmail } from '../jobs/welcomeEmail';
+import { calculateSchoolHealthScores } from '../jobs/schoolHealthScore';
 
 // ---------------------------------------------------------------
 // GET /api/super/stats
@@ -193,14 +196,21 @@ async function buildSchoolsOverview() {
 }
 
 export async function getAnalytics(req: AuthRequest, res: Response): Promise<void> {
-  const [userGrowth, activityTrend, submissionRate, schoolsOverview] = await Promise.all([
+  const [userGrowth, activityTrend, submissionRate, schoolsOverview, healthScores] = await Promise.all([
     buildUserGrowth(),
     buildActivityTrend(),
     buildSubmissionRate(),
     buildSchoolsOverview(),
+    calculateSchoolHealthScores(),
   ]);
 
-  send(res, 200, { userGrowth, activityTrend, submissionRate, schoolsOverview });
+  const schoolHealthScores = healthScores.map((h) => ({
+    schoolName: h.schoolName,
+    score: h.score,
+    grade: h.grade,
+  }));
+
+  send(res, 200, { userGrowth, activityTrend, submissionRate, schoolsOverview, schoolHealthScores });
 }
 
 // ---------------------------------------------------------------
@@ -449,10 +459,12 @@ export async function createSchoolAdmin(req: AuthRequest, res: Response): Promis
   await prisma.school.update({ where: { id: schoolId }, data: { adminId: user.id } });
 
   try {
-    await sendEmail({
-      to: email,
-      subject: 'Welcome to EduPortal',
-      html: `<p>Hi ${name},</p><p>A School Admin account has been created for you at <strong>${school.name}</strong>. Sign in with the email and password provided to you by the platform administrator.</p>`,
+    await sendWelcomeEmail({
+      name,
+      email,
+      role: 'school_admin',
+      schoolName: school.name,
+      password,
     });
   } catch (err) {
     console.warn('[createSchoolAdmin] Welcome email failed:', err);
@@ -645,10 +657,36 @@ export async function triggerBackup(req: AuthRequest, res: Response): Promise<vo
   const superAdmin = await prisma.user.findUnique({ where: { id: req.user!.userId } });
   if (superAdmin) {
     try {
+      const now = new Date();
+      const [totalSchools, usersByRole, totalActivities, totalSubmissions] = await Promise.all([
+        prisma.school.count({ where: { isActive: true } }),
+        prisma.user.groupBy({ by: ['role'], where: { isActive: true }, _count: { role: true } }),
+        prisma.activity.count(),
+        prisma.submission.count(),
+      ]);
+      const totalUsers = usersByRole.reduce((sum, r) => sum + r._count.role, 0);
+      const totalStudents = usersByRole.find((r) => r.role === 'student')?._count.role ?? 0;
+      const roleBreakdown = usersByRole.map((r) => `${r.role}: ${r._count.role}`).join(', ');
+
+      const bodyHtml = `
+        ${emailStat('Status', `${emailBadge('✅ Backup Successful', '#0ca30c')}`)}
+        ${emailStat('Triggered by', superAdmin.name)}
+        ${emailStat('Timestamp', now.toLocaleString())}
+        ${emailSection(
+          'Database Stats at Time of Backup',
+          `${emailStat('Total Schools', totalSchools)}
+           ${emailStat('Total Users', `${totalUsers} (${roleBreakdown})`)}
+           ${emailStat('Total Students', totalStudents)}
+           ${emailStat('Total Activities', totalActivities)}
+           ${emailStat('Total Submissions', totalSubmissions)}`
+        )}
+        ${emailStat('Next scheduled backup', 'Every Sunday at midnight')}
+      `;
+
       await sendEmail({
         to: superAdmin.email,
-        subject: 'EduPortal backup triggered',
-        html: `<p>A manual database backup was triggered at ${new Date().toISOString()}.</p>`,
+        subject: `EduPortal Backup Report — ${now.toLocaleDateString()}`,
+        html: emailLayout({ title: 'Backup Report', bodyHtml }),
       });
     } catch (err) {
       console.warn('[backup] Email notification failed:', err);
