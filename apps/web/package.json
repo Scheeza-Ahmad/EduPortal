@@ -17,6 +17,7 @@
     "@radix-ui/react-slot": "^1.3.3",
     "@radix-ui/react-switch": "^1.3.7",
     "@radix-ui/react-tabs": "^1.1.21",
+    "@react-pdf/renderer": "^3.4.5",
     "axios": "^1.7.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

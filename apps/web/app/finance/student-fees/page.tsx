@@ -167,7 +167,10 @@ export default function StudentFeesPage() {
 
   function openPaymentDialog(fee: StudentFee) {
     setPaymentTarget(fee);
-    setPaymentForm({ amount: '', paymentDate: '', notes: '' });
+    // Only full settlement is accepted — pre-fill the exact balance and the
+    // amount field stays read-only (see the dialog below).
+    const remaining = fee.totalDue - fee.paidAmount;
+    setPaymentForm({ amount: String(remaining), paymentDate: '', notes: '' });
     setPaymentError(null);
   }
 
@@ -175,15 +178,31 @@ export default function StudentFeesPage() {
     e.preventDefault();
     if (!paymentTarget) return;
     setPaymentError(null);
+
+    // Mirrors the backend's full-payment-only check for instant feedback —
+    // the server still re-validates against the freshest totalDue/paidAmount.
+    const remaining = paymentTarget.totalDue - paymentTarget.paidAmount;
+    if (Math.abs(Number(paymentForm.amount) - remaining) > 0.01) {
+      setPaymentError(`Full payment required. Amount must be exactly PKR ${remaining.toLocaleString()}`);
+      return;
+    }
+
     setPaymentSubmitting(true);
     try {
-      await api.post(`/api/finance/payments/${paymentTarget.id}`, {
-        amount: Number(paymentForm.amount),
-        paymentDate: paymentForm.paymentDate || undefined,
-        notes: paymentForm.notes || undefined,
-      });
+      const paymentRes = await api.post<{ success: boolean; data: { payment: { id: string } } }>(
+        `/api/finance/payments/${paymentTarget.id}`,
+        {
+          amount: Number(paymentForm.amount),
+          paymentDate: paymentForm.paymentDate || undefined,
+          notes: paymentForm.notes || undefined,
+        }
+      );
+      // The receipt endpoint keys off the FeePayment's own id, not the
+      // StudentFee id the payment was recorded against — use the id the
+      // POST just returned, not paymentTarget.id.
+      const paymentId = paymentRes.data.data.payment.id;
       const res = await api.get<{ success: boolean; data: ReceiptData }>(
-        `/api/finance/payments/receipt/${paymentTarget.id}`
+        `/api/finance/payments/receipt/${paymentId}`
       );
       setPaymentTarget(null);
       setReceipt(res.data.data);
@@ -278,13 +297,13 @@ export default function StudentFeesPage() {
                       <Button variant="outline" size="sm" onClick={() => openDiscountDialog(fee)}>
                         Discount
                       </Button>
-                      <Button
-                        size="sm"
-                        disabled={fee.status === 'paid'}
-                        onClick={() => openPaymentDialog(fee)}
-                      >
-                        Pay
-                      </Button>
+                      {fee.status === 'paid' ? (
+                        <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Fully Paid</Badge>
+                      ) : (
+                        <Button size="sm" onClick={() => openPaymentDialog(fee)}>
+                          Pay
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -346,13 +365,15 @@ export default function StudentFeesPage() {
           )}
           <form onSubmit={handleRecordPayment} className="space-y-4">
             <div className="space-y-2">
-              <Label>Amount (PKR)</Label>
+              <Label>
+                Full payment required — PKR {Number(paymentForm.amount || 0).toLocaleString()}
+              </Label>
               <Input
                 type="number"
-                min={1}
                 required
+                readOnly
                 value={paymentForm.amount}
-                onChange={(e) => setPaymentForm((f) => ({ ...f, amount: e.target.value }))}
+                className="bg-gray-50 cursor-not-allowed"
               />
             </div>
             <div className="space-y-2">

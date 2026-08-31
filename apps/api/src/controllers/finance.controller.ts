@@ -42,6 +42,24 @@ function computeFeeStatus(paidAmount: number, totalDue: number, dueDate: Date): 
 }
 
 // =================================================================
+// School Info (read-only — used to prefill the setup wizard)
+// GET /api/finance/school-info
+// =================================================================
+
+export async function getSchoolInfo(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { id: true, name: true } });
+  if (!school) {
+    send(res, 404, undefined, 'School not found');
+    return;
+  }
+
+  send(res, 200, school);
+}
+
+// =================================================================
 // 1. School Setup (Admin only)
 // =================================================================
 
@@ -52,6 +70,7 @@ const settingsSchema = z.object({
   invoiceFooterText: z.string().max(500).optional().nullable(),
   principalName: z.string().max(120).optional().nullable(),
   address: z.string().max(300).optional().nullable(),
+  phone: z.string().max(40).optional().nullable(),
 });
 
 // GET /api/finance/setup/settings
@@ -515,6 +534,17 @@ export async function recordPayment(req: AuthRequest, res: Response): Promise<vo
   }
 
   const totalDue = studentFee.netPayable + lateFine;
+
+  // Only full settlement is accepted — no partial payments. Validated
+  // against the freshly recalculated totalDue (net payable + this payment's
+  // late fine), not the possibly-stale value already stored on the record.
+  // Float amounts compared with a small epsilon rather than strict equality.
+  const remaining = totalDue - studentFee.paidAmount;
+  if (Math.abs(amount - remaining) > 0.01) {
+    send(res, 400, undefined, `Full payment required. Amount must be exactly PKR ${remaining}`);
+    return;
+  }
+
   const paidAmount = studentFee.paidAmount + amount;
   const status = computeFeeStatus(paidAmount, totalDue, studentFee.dueDate);
 
@@ -630,12 +660,14 @@ async function computeStatsForMonth(schoolId: string, monthYear: string) {
   let overdueCount = 0;
   let totalLateFine = 0;
   const byClassMap = new Map<number, ClassStat>();
+  const statusCounts = { paid: 0, partial: 0, unpaid: 0, overdue: 0 };
 
   for (const fee of studentFees) {
     totalDue += fee.totalDue;
     totalCollected += fee.paidAmount;
     totalLateFine += fee.lateFine;
     if (fee.status === 'overdue') overdueCount += 1;
+    statusCounts[fee.status] += 1;
 
     const classNumber = fee.feeStructure.classNumber;
     const bucket = byClassMap.get(classNumber) ?? {
@@ -654,7 +686,16 @@ async function computeStatsForMonth(schoolId: string, monthYear: string) {
   const collectionRate = totalDue > 0 ? (totalCollected / totalDue) * 100 : 0;
   const byClass = Array.from(byClassMap.values()).sort((a, b) => a.classNumber - b.classNumber);
 
-  return { totalDue, totalCollected, totalPending, overdueCount, collectionRate, totalLateFine, byClass };
+  return {
+    totalDue,
+    totalCollected,
+    totalPending,
+    overdueCount,
+    collectionRate,
+    totalLateFine,
+    byClass,
+    statusCounts,
+  };
 }
 
 // GET /api/finance/stats?monthYear=2024-09
@@ -670,6 +711,137 @@ export async function getFinanceStats(req: AuthRequest, res: Response): Promise<
 
   const stats = await computeStatsForMonth(schoolId, monthYear);
   send(res, 200, stats);
+}
+
+function lastNMonths(n: number): { monthYear: string; monthLabel: string }[] {
+  const now = new Date();
+  const months: { monthYear: string; monthLabel: string }[] = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push({
+      monthYear: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+      monthLabel: d.toLocaleString('en-US', { month: 'short' }),
+    });
+  }
+  return months;
+}
+
+// GET /api/finance/stats/trend?months=6
+export async function getStatsTrend(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const months = Math.min(24, Math.max(1, parseInt(String(req.query.months ?? '6'), 10) || 6));
+  const periods = lastNMonths(months);
+
+  const trend = [];
+  for (const period of periods) {
+    const stats = await computeStatsForMonth(schoolId, period.monthYear);
+    trend.push({
+      month: period.monthYear,
+      monthLabel: period.monthLabel,
+      totalDue: stats.totalDue,
+      totalCollected: stats.totalCollected,
+      totalPending: stats.totalPending,
+    });
+  }
+
+  send(res, 200, { trend });
+}
+
+// GET /api/finance/stats/payment-activity?days=7
+export async function getPaymentActivity(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const days = Math.min(30, Math.max(1, parseInt(String(req.query.days ?? '7'), 10) || 7));
+
+  const start = new Date();
+  start.setDate(start.getDate() - (days - 1));
+  start.setHours(0, 0, 0, 0);
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+
+  const payments = await prisma.feePayment.findMany({
+    where: { schoolId, paymentDate: { gte: start, lte: end } },
+    select: { paymentDate: true },
+  });
+
+  // Bucketed by UTC calendar day — consistent with how paymentDate is stored.
+  const counts = new Map<string, number>();
+  for (let i = 0; i < days; i++) {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    counts.set(d.toISOString().slice(0, 10), 0);
+  }
+  for (const p of payments) {
+    const key = p.paymentDate.toISOString().slice(0, 10);
+    if (counts.has(key)) counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+
+  const activity = Array.from(counts.entries()).map(([date, count]) => ({
+    date,
+    dayLabel: new Date(`${date}T00:00:00Z`).toLocaleString('en-US', { weekday: 'short', timeZone: 'UTC' }),
+    count,
+  }));
+
+  send(res, 200, { activity });
+}
+
+// GET /api/finance/stats/overdue
+export async function getOverdueStudents(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const fees = await prisma.studentFee.findMany({
+    where: { schoolId, status: 'overdue' },
+    include: {
+      student: {
+        select: {
+          name: true,
+          studentProfile: { select: { class: { select: { number: true, section: true } } } },
+        },
+      },
+    },
+    orderBy: { dueDate: 'asc' },
+  });
+
+  const now = Date.now();
+  const overdue = fees.map((f) => ({
+    studentName: f.student.name,
+    className: f.student.studentProfile?.class.number ?? null,
+    section: f.student.studentProfile?.class.section ?? null,
+    totalDue: f.totalDue,
+    paidAmount: f.paidAmount,
+    dueDate: f.dueDate,
+    daysOverdue: Math.floor((now - f.dueDate.getTime()) / (1000 * 60 * 60 * 24)),
+  }));
+
+  send(res, 200, { overdue });
+}
+
+// GET /api/finance/stats/recent-payments?limit=10
+export async function getRecentPayments(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit ?? '10'), 10) || 10));
+
+  const payments = await prisma.feePayment.findMany({
+    where: { schoolId },
+    orderBy: { paymentDate: 'desc' },
+    take: limit,
+    include: { studentFee: { include: { student: { select: { name: true } } } } },
+  });
+
+  send(res, 200, {
+    payments: payments.map((p) => ({
+      studentName: p.studentFee.student.name,
+      amount: p.amount,
+      paymentDate: p.paymentDate,
+      receiptNumber: p.receiptNumber,
+    })),
+  });
 }
 
 // =================================================================
@@ -689,6 +861,97 @@ export async function getFinanceReports(req: AuthRequest, res: Response): Promis
   send(res, 200, { reports });
 }
 
+interface ReportStudentRow {
+  name: string;
+  rollNo: string;
+  baseFee: number;
+  discount: number;
+  netPayable: number;
+  lateFine: number;
+  totalDue: number;
+  paidAmount: number;
+  status: FeeStatus;
+  lastPaymentDate: string | null;
+  receiptNumber: string | null;
+}
+
+interface ReportClassGroup {
+  classNumber: number;
+  section: string;
+  totalDue: number;
+  totalPaid: number;
+  totalPending: number;
+  studentCount: number;
+  students: ReportStudentRow[];
+}
+
+/**
+ * Per-student, per-class breakdown for a month — stored as FinanceReport.meta
+ * so a generated report stays a frozen snapshot even if fees are edited later.
+ */
+async function computeReportDetail(schoolId: string, monthYear: string): Promise<ReportClassGroup[]> {
+  const studentFees = await prisma.studentFee.findMany({
+    where: { schoolId, feeStructure: { monthYear } },
+    include: {
+      student: {
+        select: {
+          name: true,
+          studentProfile: {
+            select: { rollNo: true, class: { select: { number: true, section: true } } },
+          },
+        },
+      },
+      feeStructure: { select: { classNumber: true } },
+      payments: { orderBy: { paymentDate: 'desc' }, take: 1, select: { paymentDate: true, receiptNumber: true } },
+    },
+  });
+
+  const groups = new Map<string, ReportClassGroup>();
+
+  for (const fee of studentFees) {
+    const profile = fee.student.studentProfile;
+    const classNumber = profile?.class.number ?? fee.feeStructure.classNumber;
+    const section = profile?.class.section ?? '—';
+    const key = `${classNumber}-${section}`;
+
+    const group = groups.get(key) ?? {
+      classNumber,
+      section,
+      totalDue: 0,
+      totalPaid: 0,
+      totalPending: 0,
+      studentCount: 0,
+      students: [],
+    };
+
+    const lastPayment = fee.payments[0] ?? null;
+
+    group.totalDue += fee.totalDue;
+    group.totalPaid += fee.paidAmount;
+    group.totalPending += fee.totalDue - fee.paidAmount;
+    group.studentCount += 1;
+    group.students.push({
+      name: fee.student.name,
+      rollNo: profile?.rollNo ?? '—',
+      baseFee: fee.baseFee,
+      discount: fee.discountAmount,
+      netPayable: fee.netPayable,
+      lateFine: fee.lateFine,
+      totalDue: fee.totalDue,
+      paidAmount: fee.paidAmount,
+      status: fee.status,
+      lastPaymentDate: lastPayment ? lastPayment.paymentDate.toISOString() : null,
+      receiptNumber: lastPayment ? lastPayment.receiptNumber : null,
+    });
+
+    groups.set(key, group);
+  }
+
+  return Array.from(groups.values()).sort(
+    (a, b) => a.classNumber - b.classNumber || a.section.localeCompare(b.section)
+  );
+}
+
 const generateReportSchema = z.object({
   monthYear: z.string().min(1).max(20),
 });
@@ -706,6 +969,8 @@ export async function generateFinanceReport(req: AuthRequest, res: Response): Pr
   const { monthYear } = parsed.data;
 
   const stats = await computeStatsForMonth(schoolId, monthYear);
+  const byClass = await computeReportDetail(schoolId, monthYear);
+  const meta = { byClass } as unknown as Prisma.InputJsonValue;
 
   const report = await prisma.financeReport.upsert({
     where: { schoolId_monthYear: { schoolId, monthYear } },
@@ -715,6 +980,7 @@ export async function generateFinanceReport(req: AuthRequest, res: Response): Pr
       totalPending: stats.totalPending,
       totalLateFine: stats.totalLateFine,
       status: 'draft',
+      meta,
     },
     create: {
       schoolId,
@@ -725,6 +991,7 @@ export async function generateFinanceReport(req: AuthRequest, res: Response): Pr
       totalPending: stats.totalPending,
       totalLateFine: stats.totalLateFine,
       status: 'draft',
+      meta,
     },
   });
 

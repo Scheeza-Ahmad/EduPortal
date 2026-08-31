@@ -12,8 +12,13 @@ import {
   getFinanceReports,
   getFinanceStats,
   getLateFeeRule,
+  getOverdueStudents,
+  getPaymentActivity,
   getReceipt,
+  getRecentPayments,
+  getSchoolInfo,
   getSchoolSettings,
+  getStatsTrend,
   getStudentFees,
   recordPayment,
   submitFinanceReport,
@@ -27,12 +32,15 @@ const router = Router();
 // Every finance route requires the finance or school_admin role.
 router.use(verifyToken, requireRole('finance', 'school_admin'));
 
-// School Setup — reads are open to finance/school_admin (router-level check
-// above), writes are admin only (stricter check added per-route).
+router.get('/school-info', getSchoolInfo);
+
+// School Setup — reads and writes are both open to finance/school_admin
+// (router-level check above already covers this; the finance-role setup
+// wizard needs to be able to write these on first login, not just admins).
 router.get('/setup/settings', getSchoolSettings);
-router.post('/setup/settings', requireRole('school_admin'), upsertSchoolSettings);
+router.post('/setup/settings', upsertSchoolSettings);
 router.get('/setup/late-fee-rule', getLateFeeRule);
-router.post('/setup/late-fee-rule', requireRole('school_admin'), upsertLateFeeRule);
+router.post('/setup/late-fee-rule', upsertLateFeeRule);
 
 // Discount Policies
 router.get('/discount-policies', getDiscountPolicies);
@@ -55,6 +63,10 @@ router.get('/payments/receipt/:paymentId', getReceipt);
 
 // Finance Stats
 router.get('/stats', getFinanceStats);
+router.get('/stats/trend', getStatsTrend);
+router.get('/stats/payment-activity', getPaymentActivity);
+router.get('/stats/overdue', getOverdueStudents);
+router.get('/stats/recent-payments', getRecentPayments);
 
 // Finance Reports
 router.get('/reports', getFinanceReports);

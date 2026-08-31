@@ -482,6 +482,7 @@ model SchoolSettings {
   invoiceFooterText String?
   principalName     String?
   address           String?
+  phone             String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -590,6 +591,7 @@ model FinanceReport {
   totalLateFine Float
   status        String    @default("draft")
   notes         String?
+  meta          Json? // class-wise + per-student breakdown snapshot, see computeReportDetail()
   submittedAt   DateTime?
   approvedBy    String?
   approvedAt    DateTime?

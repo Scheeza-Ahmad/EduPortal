@@ -27,6 +27,7 @@ export default function FinanceLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { accessToken, user, setAuth, clearAuth } = useAuthStore();
   const [checkingSession, setCheckingSession] = useState(true);
+  const [checkingSetup, setCheckingSetup] = useState(true);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
 
   useEffect(() => {
@@ -72,6 +73,38 @@ export default function FinanceLayout({ children }: { children: ReactNode }) {
     }
   }, [checkingSession, user, router]);
 
+  // First-time setup gate: if this school hasn't configured SchoolSettings
+  // yet, force the wizard before anything else in the portal is reachable.
+  useEffect(() => {
+    if (checkingSession) return;
+
+    if (pathname === '/finance/wizard') {
+      setCheckingSetup(false);
+      return;
+    }
+
+    setCheckingSetup(true);
+    let cancelled = false;
+    api
+      .get('/api/finance/setup/settings')
+      .then((res) => {
+        if (cancelled) return;
+        if (!res.data?.data) {
+          router.replace('/finance/wizard');
+        } else {
+          setCheckingSetup(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setCheckingSetup(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkingSession, pathname]);
+
   async function handleLogout() {
     try {
       await api.post('/api/auth/logout');
@@ -81,12 +114,19 @@ export default function FinanceLayout({ children }: { children: ReactNode }) {
     }
   }
 
-  if (checkingSession) {
+  if (checkingSession || checkingSetup) {
     return (
       <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
         Loading...
       </div>
     );
+  }
+
+  const isWizard = pathname === '/finance/wizard';
+
+  if (isWizard) {
+    // Full-width — no sidebar/header chrome while onboarding is in progress.
+    return <div className="min-h-screen p-6">{children}</div>;
   }
 
   return (
