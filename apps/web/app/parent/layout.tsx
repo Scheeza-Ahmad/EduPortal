@@ -21,6 +21,7 @@ const NAV_ITEMS = [
   { href: '/parent', label: 'Dashboard' },
   { href: '/parent/grades', label: 'Grades' },
   { href: '/parent/attendance', label: 'Attendance' },
+  { href: '/parent/fees', label: 'Fees' },
   { href: '/parent/timetable', label: 'Timetable' },
   { href: '/parent/announcements', label: 'Announcements' },
   { href: '/parent/report-card', label: 'Report Card' },

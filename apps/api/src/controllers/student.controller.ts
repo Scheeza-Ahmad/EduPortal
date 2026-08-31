@@ -426,3 +426,49 @@ export async function getBadges(req: AuthRequest, res: Response): Promise<void> 
 
   send(res, 200, { badges });
 }
+
+// =================================================================
+// Fees
+// GET /api/student/fees
+// =================================================================
+
+export async function getMyFees(req: AuthRequest, res: Response): Promise<void> {
+  const profile = await requireStudentProfile(req, res);
+  if (!profile) return;
+  const userId = req.user!.userId;
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { name: true, school: { select: { name: true } } },
+  });
+
+  // StudentFee.studentId points at User.id (not StudentProfile.id) — unlike
+  // Grade/Submission/Badge which key off the StudentProfile.
+  const fees = await prisma.studentFee.findMany({
+    where: { studentId: userId },
+    include: { feeStructure: { select: { monthYear: true, dueDate: true } } },
+    orderBy: { dueDate: 'desc' },
+  });
+
+  send(res, 200, {
+    schoolName: user?.school?.name ?? '',
+    student: {
+      name: user?.name ?? '',
+      rollNo: profile.rollNo,
+      classNumber: profile.class.number,
+      section: profile.class.section,
+    },
+    fees: fees.map((f) => ({
+      id: f.id,
+      monthYear: f.feeStructure.monthYear,
+      dueDate: f.feeStructure.dueDate,
+      baseFee: f.baseFee,
+      discountAmount: f.discountAmount,
+      netPayable: f.netPayable,
+      lateFine: f.lateFine,
+      totalDue: f.totalDue,
+      paidAmount: f.paidAmount,
+      status: f.status,
+    })),
+  });
+}

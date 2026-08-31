@@ -590,7 +590,14 @@ export async function getReceipt(req: AuthRequest, res: Response): Promise<void>
     include: {
       studentFee: {
         include: {
-          student: { select: { name: true, email: true } },
+          student: {
+            select: {
+              name: true,
+              studentProfile: {
+                select: { rollNo: true, class: { select: { number: true, section: true } } },
+              },
+            },
+          },
           feeStructure: { select: { classNumber: true, monthYear: true } },
         },
       },
@@ -604,19 +611,25 @@ export async function getReceipt(req: AuthRequest, res: Response): Promise<void>
 
   const settings = await prisma.schoolSettings.findUnique({ where: { schoolId } });
   const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } });
+  const profile = payment.studentFee.student.studentProfile;
 
   send(res, 200, {
     receiptNumber: payment.receiptNumber,
-    amount: payment.amount,
     paymentDate: payment.paymentDate,
+    amount: payment.amount,
     notes: payment.notes,
-    recordedBy: payment.recordedByUser.name,
-    student: payment.studentFee.student,
-    classNumber: payment.studentFee.feeStructure.classNumber,
     monthYear: payment.studentFee.feeStructure.monthYear,
+    student: {
+      name: payment.studentFee.student.name,
+      rollNo: profile?.rollNo ?? '—',
+      class: profile?.class.number ?? payment.studentFee.feeStructure.classNumber,
+      section: profile?.class.section ?? '—',
+    },
     studentFee: {
       baseFee: payment.studentFee.baseFee,
+      discountPercent: payment.studentFee.discountPercent,
       discountAmount: payment.studentFee.discountAmount,
+      netPayable: payment.studentFee.netPayable,
       lateFine: payment.studentFee.lateFine,
       totalDue: payment.studentFee.totalDue,
       paidAmount: payment.studentFee.paidAmount,
@@ -624,11 +637,12 @@ export async function getReceipt(req: AuthRequest, res: Response): Promise<void>
     },
     school: {
       name: school?.name ?? '',
-      invoicePrefix: settings?.invoicePrefix ?? 'INV',
-      principalName: settings?.principalName ?? null,
       address: settings?.address ?? null,
+      phone: settings?.phone ?? null,
       invoiceFooterText: settings?.invoiceFooterText ?? null,
+      invoicePrefix: settings?.invoicePrefix ?? 'INV',
     },
+    recordedByName: payment.recordedByUser.name,
   });
 }
 

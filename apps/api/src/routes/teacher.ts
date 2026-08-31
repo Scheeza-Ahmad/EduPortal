@@ -11,6 +11,7 @@ import {
   getAttendanceForDate,
   getAttendanceReport,
   getDashboard,
+  getFeeDefaulters,
   getMyClassAnnouncements,
   getMyClasses,
   getMySubjects,
@@ -27,6 +28,7 @@ const router = Router();
 router.use(verifyToken, requireRole('teacher'));
 
 router.get('/dashboard', getDashboard);
+router.get('/fee-defaulters', getFeeDefaulters);
 
 // Activities — /reuse must come before /:id so it isn't swallowed as an id.
 router.get('/activities/reuse', getReusableActivities);

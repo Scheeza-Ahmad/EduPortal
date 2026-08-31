@@ -5,6 +5,7 @@ import {
   downloadChildReportCard,
   getChildAnnouncements,
   getChildAttendance,
+  getChildFees,
   getChildGrades,
   getChildReportCard,
   getChildTimetable,
@@ -25,5 +26,6 @@ router.get('/child/:studentId/report-card', getChildReportCard);
 router.get('/child/:studentId/attendance', getChildAttendance);
 router.get('/child/:studentId/timetable', getChildTimetable);
 router.get('/child/:studentId/announcements', getChildAnnouncements);
+router.get('/child/:studentId/fees', getChildFees);
 
 export default router;

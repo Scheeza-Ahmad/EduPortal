@@ -8,6 +8,7 @@ import {
   getDashboard,
   getGradeCard,
   getGrades,
+  getMyFees,
   getNotifications,
   getSubmissions,
   markNotificationRead,
@@ -34,5 +35,7 @@ router.get('/notifications', getNotifications);
 router.patch('/notifications/:id/read', markNotificationRead);
 
 router.get('/badges', getBadges);
+
+router.get('/fees', getMyFees);
 
 export default router;

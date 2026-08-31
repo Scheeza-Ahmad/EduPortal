@@ -39,8 +39,10 @@ router.get('/school-info', getSchoolInfo);
 // wizard needs to be able to write these on first login, not just admins).
 router.get('/setup/settings', getSchoolSettings);
 router.post('/setup/settings', upsertSchoolSettings);
+router.patch('/setup/settings', upsertSchoolSettings);
 router.get('/setup/late-fee-rule', getLateFeeRule);
 router.post('/setup/late-fee-rule', upsertLateFeeRule);
+router.patch('/setup/late-fee-rule', upsertLateFeeRule);
 
 // Discount Policies
 router.get('/discount-policies', getDiscountPolicies);

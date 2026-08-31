@@ -14,6 +14,7 @@ const NAV_ITEMS = [
   { href: '/student/activities', label: 'Activities' },
   { href: '/student/grades', label: 'Grades' },
   { href: '/student/attendance', label: 'Attendance' },
+  { href: '/student/fees', label: 'Fees' },
   { href: '/student/badges', label: 'Badges' },
   { href: '/student/notifications', label: 'Notifications' },
 ];

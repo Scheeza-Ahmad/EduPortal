@@ -644,3 +644,55 @@ export async function deleteTeacherAnnouncement(req: AuthRequest, res: Response)
 
   send(res, 200, { message: 'Announcement deleted' });
 }
+
+// =================================================================
+// Fee Defaulters
+// GET /api/teacher/fee-defaulters
+// =================================================================
+
+export async function getFeeDefaulters(req: AuthRequest, res: Response): Promise<void> {
+  const teacherId = req.user!.userId;
+
+  const now = new Date();
+  const monthYear = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+  // "My classes" = classes I have a subject in, plus any class I'm the
+  // assigned class teacher for — same definition getMyClasses uses.
+  const myClasses = await prisma.class.findMany({
+    where: { OR: [{ subjects: { some: { teacherId } } }, { classTeacherId: teacherId } ] },
+    select: { id: true },
+  });
+  const classIds = myClasses.map((c) => c.id);
+  if (classIds.length === 0) {
+    send(res, 200, { monthYear, defaulters: [] });
+    return;
+  }
+
+  const fees = await prisma.studentFee.findMany({
+    where: {
+      status: { in: ['unpaid', 'overdue'] },
+      feeStructure: { monthYear },
+      student: { studentProfile: { classId: { in: classIds } } },
+    },
+    include: {
+      student: {
+        select: {
+          name: true,
+          studentProfile: { select: { class: { select: { number: true, section: true } } } },
+        },
+      },
+    },
+    orderBy: { totalDue: 'desc' },
+  });
+
+  send(res, 200, {
+    monthYear,
+    defaulters: fees.map((f) => ({
+      studentName: f.student.name,
+      className: f.student.studentProfile?.class.number ?? null,
+      section: f.student.studentProfile?.class.section ?? null,
+      totalDue: f.totalDue - f.paidAmount,
+      status: f.status,
+    })),
+  });
+}

@@ -2,7 +2,9 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { AxiosError } from 'axios';
+import { pdf } from '@react-pdf/renderer';
 import { api } from '@/lib/api';
+import { ReceiptPdfDocument } from '@/lib/receiptPdf';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -53,13 +55,22 @@ interface StudentFee {
 
 interface ReceiptData {
   receiptNumber: string;
-  amount: number;
   paymentDate: string;
-  student: { name: string };
-  classNumber: number;
+  amount: number;
   monthYear: string;
-  studentFee: { totalDue: number; paidAmount: number; status: string };
-  school: { name: string; invoicePrefix: string };
+  student: { name: string; rollNo: string; class: number; section: string };
+  studentFee: {
+    baseFee: number;
+    discountPercent: number;
+    discountAmount: number;
+    netPayable: number;
+    lateFine: number;
+    totalDue: number;
+    paidAmount: number;
+    status: string;
+  };
+  school: { name: string; address: string | null; phone: string | null; invoiceFooterText: string | null };
+  recordedByName: string;
 }
 
 const STATUS_VARIANT: Record<StudentFee['status'], 'default' | 'outline' | 'destructive' | 'secondary'> = {
@@ -100,6 +111,25 @@ export default function StudentFeesPage() {
   const [paymentSubmitting, setPaymentSubmitting] = useState(false);
 
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
+  const [downloadingReceipt, setDownloadingReceipt] = useState(false);
+
+  async function handleDownloadReceipt() {
+    if (!receipt) return;
+    setDownloadingReceipt(true);
+    try {
+      const blob = await pdf(<ReceiptPdfDocument {...receipt} />).toBlob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Receipt-${receipt.receiptNumber}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setDownloadingReceipt(false);
+    }
+  }
 
   async function loadFees() {
     setLoading(true);
@@ -424,7 +454,9 @@ export default function StudentFeesPage() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Class</span>
-                  <span>Class {receipt.classNumber}</span>
+                  <span>
+                    {receipt.student.class} - {receipt.student.section} (Roll No: {receipt.student.rollNo})
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Month</span>
@@ -448,6 +480,13 @@ export default function StudentFeesPage() {
             </div>
           )}
           <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={!receipt || downloadingReceipt}
+              onClick={handleDownloadReceipt}
+            >
+              {downloadingReceipt ? 'Preparing...' : 'Download Receipt PDF'}
+            </Button>
             <Button variant="outline" onClick={() => setReceipt(null)}>
               Close
             </Button>

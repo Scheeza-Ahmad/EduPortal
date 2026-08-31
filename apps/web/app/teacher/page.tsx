@@ -41,10 +41,21 @@ interface Dashboard {
   recentActivity: RecentAction[];
 }
 
+interface FeeDefaulter {
+  studentName: string;
+  className: number | null;
+  section: string | null;
+  totalDue: number;
+  status: 'unpaid' | 'overdue';
+}
+
 export default function TeacherDashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const [defaulters, setDefaulters] = useState<FeeDefaulter[]>([]);
+  const [defaultersMonth, setDefaultersMonth] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -60,6 +71,17 @@ export default function TeacherDashboardPage() {
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
+
+    api
+      .get<{ success: boolean; data: { monthYear: string; defaulters: FeeDefaulter[] } }>(
+        '/api/teacher/fee-defaulters'
+      )
+      .then((res) => {
+        if (cancelled) return;
+        setDefaultersMonth(res.data.data.monthYear);
+        setDefaulters(res.data.data.defaulters);
+      })
+      .catch(() => {});
 
     return () => {
       cancelled = true;
@@ -219,6 +241,54 @@ export default function TeacherDashboardPage() {
           )}
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">
+            Fee Defaulters{defaultersMonth ? ` — ${monthYearLabel(defaultersMonth)}` : ''}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {defaulters.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No fee defaulters this month 🎉</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-xs text-muted-foreground">
+                    <th className="py-1 pr-2">Student</th>
+                    <th className="py-1 pr-2">Class</th>
+                    <th className="py-1 pr-2">Total Due</th>
+                    <th className="py-1 pr-2">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {defaulters.map((d, i) => (
+                    <tr key={i} className="border-b last:border-0">
+                      <td className="py-1.5 pr-2 font-medium">{d.studentName}</td>
+                      <td className="py-1.5 pr-2 text-muted-foreground">
+                        {d.className != null ? `${d.className}-${d.section}` : '—'}
+                      </td>
+                      <td className="py-1.5 pr-2">PKR {d.totalDue.toLocaleString()}</td>
+                      <td className="py-1.5 pr-2">
+                        <Badge variant={d.status === 'overdue' ? 'destructive' : 'secondary'}>
+                          {d.status.toUpperCase()}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
+}
+
+function monthYearLabel(monthYear: string): string {
+  const [y, m] = monthYear.split('-').map(Number);
+  if (!y || !m) return monthYear;
+  return new Date(y, m - 1, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
 }

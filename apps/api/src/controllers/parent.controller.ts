@@ -325,3 +325,53 @@ export async function getChildAnnouncements(req: AuthRequest, res: Response): Pr
 
   send(res, 200, { announcements });
 }
+
+// =================================================================
+// GET /api/parent/child/:studentId/fees
+// =================================================================
+
+export async function getChildFees(req: AuthRequest, res: Response): Promise<void> {
+  const profile = await requireParentProfile(req, res);
+  if (!profile) return;
+
+  const child = findChild(profile, req.params.studentId);
+  if (!child) {
+    send(res, 404, undefined, 'Child not found');
+    return;
+  }
+
+  // StudentFee.studentId points at User.id, not StudentProfile.id — the
+  // route param here is the StudentProfile.id, so translate via child.user.id.
+  const [fees, school] = await Promise.all([
+    prisma.studentFee.findMany({
+      where: { studentId: child.user.id },
+      include: { feeStructure: { select: { monthYear: true, dueDate: true } } },
+      orderBy: { dueDate: 'desc' },
+    }),
+    req.user!.schoolId
+      ? prisma.school.findUnique({ where: { id: req.user!.schoolId }, select: { name: true } })
+      : null,
+  ]);
+
+  send(res, 200, {
+    schoolName: school?.name ?? '',
+    student: {
+      name: child.user.name,
+      rollNo: child.rollNo,
+      classNumber: child.class.number,
+      section: child.class.section,
+    },
+    fees: fees.map((f) => ({
+      id: f.id,
+      monthYear: f.feeStructure.monthYear,
+      dueDate: f.feeStructure.dueDate,
+      baseFee: f.baseFee,
+      discountAmount: f.discountAmount,
+      netPayable: f.netPayable,
+      lateFine: f.lateFine,
+      totalDue: f.totalDue,
+      paidAmount: f.paidAmount,
+      status: f.status,
+    })),
+  });
+}
