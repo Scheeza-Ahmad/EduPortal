@@ -50,7 +50,12 @@ function signAccessToken(payload: AccessTokenPayload): string {
 }
 
 function signRefreshToken(userId: string): string {
-  return jwt.sign({ userId }, process.env.JWT_REFRESH_SECRET as string, {
+  // jti guarantees uniqueness even if two refresh tokens are issued for the
+  // same user within the same second — without it the JWT (and therefore
+  // its sha256 hash stored in RefreshToken.tokenHash) is fully deterministic
+  // from {userId, iat, exp}, and a second call collides on the unique index.
+  const jti = crypto.randomBytes(16).toString('hex');
+  return jwt.sign({ userId, jti }, process.env.JWT_REFRESH_SECRET as string, {
     expiresIn: process.env.JWT_REFRESH_EXPIRES ?? '7d',
   } as jwt.SignOptions);
 }

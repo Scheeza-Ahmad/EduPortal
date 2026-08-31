@@ -25,74 +25,112 @@ function gradeFor(score: number): SchoolHealthResult['grade'] {
   return 'Critical';
 }
 
-/** Exported so the analytics endpoint can reuse the same calculation on demand. */
+/**
+ * Was 1 + N*6 queries (one round-trip per school). Batched down to ~6 fixed
+ * queries total regardless of school count — the per-school version was
+ * exhausting the DB connection pool under concurrent dashboard load.
+ */
 export async function calculateSchoolHealthScores(): Promise<SchoolHealthResult[]> {
   const weekStart = new Date();
   weekStart.setDate(weekStart.getDate() - 7);
 
   const schools = await prisma.school.findMany({ where: { isActive: true } });
+  const schoolIds = schools.map((s) => s.id);
+  if (schoolIds.length === 0) return [];
 
-  return Promise.all(
-    schools.map(async (school) => {
-      const [presentCount, totalAttendance, activitiesDue, submissionsMade, teachers] =
-        await Promise.all([
-          prisma.attendance.count({
-            where: {
-              subject: { class: { schoolId: school.id } },
-              date: { gte: weekStart },
-              status: 'present',
-            },
-          }),
-          prisma.attendance.count({
-            where: { subject: { class: { schoolId: school.id } }, date: { gte: weekStart } },
-          }),
-          prisma.activity.count({
-            where: {
-              subject: { class: { schoolId: school.id } },
-              dueDate: { gte: weekStart },
-              isDraft: false,
-              isActive: true,
-            },
-          }),
-          prisma.submission.count({
-            where: {
-              activity: { subject: { class: { schoolId: school.id } }, dueDate: { gte: weekStart } },
-              submittedAt: { gte: weekStart },
-            },
-          }),
-          prisma.user.findMany({
-            where: { schoolId: school.id, role: 'teacher', isActive: true },
-            select: { id: true },
-          }),
-        ]);
+  const [attendanceRecords, activitiesDue, teacherCounts, activeTeachers] = await Promise.all([
+    prisma.attendance.findMany({
+      where: { date: { gte: weekStart }, subject: { class: { schoolId: { in: schoolIds } } } },
+      select: { status: true, subject: { select: { class: { select: { schoolId: true } } } } },
+    }),
+    prisma.activity.findMany({
+      where: {
+        dueDate: { gte: weekStart },
+        isDraft: false,
+        isActive: true,
+        subject: { class: { schoolId: { in: schoolIds } } },
+      },
+      select: { id: true, subject: { select: { class: { select: { schoolId: true } } } } },
+    }),
+    prisma.user.groupBy({
+      by: ['schoolId'],
+      where: { schoolId: { in: schoolIds }, role: 'teacher', isActive: true },
+      _count: { _all: true },
+    }),
+    prisma.user.findMany({
+      where: {
+        schoolId: { in: schoolIds },
+        role: 'teacher',
+        isActive: true,
+        activities: { some: { createdAt: { gte: weekStart } } },
+      },
+      select: { schoolId: true },
+    }),
+  ]);
 
-      const activeTeacherCount = await prisma.user.count({
-        where: {
-          schoolId: school.id,
-          role: 'teacher',
-          isActive: true,
-          activities: { some: { createdAt: { gte: weekStart } } },
-        },
-      });
+  const activityIds = activitiesDue.map((a) => a.id);
+  const submissionsThisWeek = activityIds.length
+    ? await prisma.submission.findMany({
+        where: { activityId: { in: activityIds }, submittedAt: { gte: weekStart } },
+        select: { activityId: true },
+      })
+    : [];
 
-      const attendanceRate = totalAttendance > 0 ? presentCount / totalAttendance : 0;
-      const submissionRate = activitiesDue > 0 ? submissionsMade / activitiesDue : 0;
-      const teacherActivityRate = teachers.length > 0 ? activeTeacherCount / teachers.length : 0;
+  const activityToSchool = new Map(activitiesDue.map((a) => [a.id, a.subject.class.schoolId]));
 
-      const attendanceScore = Math.round(attendanceRate * 40);
-      const submissionScore = Math.round(submissionRate * 30);
-      const teacherActivityScore = Math.round(teacherActivityRate * 30);
-      const score = attendanceScore + submissionScore + teacherActivityScore;
+  const attendanceBySchool = new Map<string, { present: number; total: number }>();
+  for (const r of attendanceRecords) {
+    const sid = r.subject.class.schoolId;
+    const entry = attendanceBySchool.get(sid) ?? { present: 0, total: 0 };
+    entry.total += 1;
+    if (r.status === 'present') entry.present += 1;
+    attendanceBySchool.set(sid, entry);
+  }
 
-      return {
-        schoolId: school.id,
-        schoolName: school.name,
-        score,
-        grade: gradeFor(score),
-        breakdown: { attendanceScore, submissionScore, teacherActivityScore },
-      };
-    })
-  );
+  const activitiesDueBySchool = new Map<string, number>();
+  for (const a of activitiesDue) {
+    const sid = a.subject.class.schoolId;
+    activitiesDueBySchool.set(sid, (activitiesDueBySchool.get(sid) ?? 0) + 1);
+  }
+
+  const submissionsBySchool = new Map<string, number>();
+  for (const s of submissionsThisWeek) {
+    const sid = activityToSchool.get(s.activityId);
+    if (!sid) continue;
+    submissionsBySchool.set(sid, (submissionsBySchool.get(sid) ?? 0) + 1);
+  }
+
+  const totalTeachersBySchool = new Map(teacherCounts.map((r) => [r.schoolId, r._count._all]));
+  const activeTeachersBySchool = new Map<string, number>();
+  for (const t of activeTeachers) {
+    if (!t.schoolId) continue;
+    activeTeachersBySchool.set(t.schoolId, (activeTeachersBySchool.get(t.schoolId) ?? 0) + 1);
+  }
+
+  return schools.map((school) => {
+    const attendance = attendanceBySchool.get(school.id) ?? { present: 0, total: 0 };
+    const activitiesDueCount = activitiesDueBySchool.get(school.id) ?? 0;
+    const submissionsCount = submissionsBySchool.get(school.id) ?? 0;
+    const totalTeachers = totalTeachersBySchool.get(school.id) ?? 0;
+    const activeTeacherCount = activeTeachersBySchool.get(school.id) ?? 0;
+
+    const attendanceRate = attendance.total > 0 ? attendance.present / attendance.total : 0;
+    const submissionRate = activitiesDueCount > 0 ? submissionsCount / activitiesDueCount : 0;
+    const teacherActivityRate = totalTeachers > 0 ? activeTeacherCount / totalTeachers : 0;
+
+    const attendanceScore = Math.round(attendanceRate * 40);
+    const submissionScore = Math.round(submissionRate * 30);
+    const teacherActivityScore = Math.round(teacherActivityRate * 30);
+    const score = attendanceScore + submissionScore + teacherActivityScore;
+
+    return {
+      schoolId: school.id,
+      schoolName: school.name,
+      score,
+      grade: gradeFor(score),
+      breakdown: { attendanceScore, submissionScore, teacherActivityScore },
+    };
+  });
 }
 
 export function startSchoolHealthScore(): void {

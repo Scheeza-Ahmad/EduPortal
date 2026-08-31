@@ -166,33 +166,58 @@ async function buildSubmissionRate() {
   return { onTime, late, pending };
 }
 
+/**
+ * Was 1 + N*4 queries (one round-trip per school). Batched down to 5 fixed
+ * queries total regardless of school count — the per-school version was
+ * exhausting the DB connection pool under concurrent dashboard load.
+ */
 async function buildSchoolsOverview() {
   const schools = await prisma.school.findMany({ orderBy: { name: 'asc' } });
+  const schoolIds = schools.map((s) => s.id);
+  if (schoolIds.length === 0) return [];
 
-  return Promise.all(
-    schools.map(async (school) => {
-      const [studentCount, teacherCount, submissionCount, mostRecentLogin] = await Promise.all([
-        prisma.user.count({ where: { schoolId: school.id, role: 'student', isActive: true } }),
-        prisma.user.count({ where: { schoolId: school.id, role: 'teacher', isActive: true } }),
-        prisma.submission.count({ where: { studentUser: { schoolId: school.id } } }),
-        prisma.user.findFirst({
-          where: { schoolId: school.id, lastLoginAt: { not: null } },
-          orderBy: { lastLoginAt: 'desc' },
-          select: { lastLoginAt: true },
-        }),
-      ]);
+  const [studentCounts, teacherCounts, submissions, lastLogins] = await Promise.all([
+    prisma.user.groupBy({
+      by: ['schoolId'],
+      where: { schoolId: { in: schoolIds }, role: 'student', isActive: true },
+      _count: { _all: true },
+    }),
+    prisma.user.groupBy({
+      by: ['schoolId'],
+      where: { schoolId: { in: schoolIds }, role: 'teacher', isActive: true },
+      _count: { _all: true },
+    }),
+    prisma.submission.findMany({
+      where: { studentUser: { schoolId: { in: schoolIds } } },
+      select: { studentUser: { select: { schoolId: true } } },
+    }),
+    prisma.user.groupBy({
+      by: ['schoolId'],
+      where: { schoolId: { in: schoolIds }, lastLoginAt: { not: null } },
+      _max: { lastLoginAt: true },
+    }),
+  ]);
 
-      return {
-        id: school.id,
-        name: school.name,
-        studentCount,
-        teacherCount,
-        submissionCount,
-        lastActive: mostRecentLogin?.lastLoginAt ?? null,
-        isActive: school.isActive,
-      };
-    })
-  );
+  const studentCountBySchool = new Map(studentCounts.map((r) => [r.schoolId, r._count._all]));
+  const teacherCountBySchool = new Map(teacherCounts.map((r) => [r.schoolId, r._count._all]));
+  const lastLoginBySchool = new Map(lastLogins.map((r) => [r.schoolId, r._max.lastLoginAt]));
+
+  const submissionCountBySchool = new Map<string, number>();
+  for (const s of submissions) {
+    const sid = s.studentUser.schoolId;
+    if (!sid) continue;
+    submissionCountBySchool.set(sid, (submissionCountBySchool.get(sid) ?? 0) + 1);
+  }
+
+  return schools.map((school) => ({
+    id: school.id,
+    name: school.name,
+    studentCount: studentCountBySchool.get(school.id) ?? 0,
+    teacherCount: teacherCountBySchool.get(school.id) ?? 0,
+    submissionCount: submissionCountBySchool.get(school.id) ?? 0,
+    lastActive: lastLoginBySchool.get(school.id) ?? null,
+    isActive: school.isActive,
+  }));
 }
 
 export async function getAnalytics(req: AuthRequest, res: Response): Promise<void> {
@@ -528,6 +553,18 @@ export async function toggleFeatures(req: AuthRequest, res: Response): Promise<v
  * Resolves human-readable names for audit log targets, one batched query per
  * target table rather than one query per row. Returns a `${table}:${id}` -> name map.
  */
+// Actions that are system/automation-triggered and have no real targetTable
+// row to point at — show a friendly label instead of "—".
+const actionDisplayMap: Record<string, string> = {
+  BACKUP: 'Database Backup',
+  SYSTEM_HEALTH_CHECK: 'System Check',
+  SCHOOL_HEALTH_SCORE: 'Health Score Report',
+  SUSPICIOUS_LOGIN_ALERT: 'Login Security',
+  INACTIVE_TEACHER_ALERT: 'Teacher Activity Check',
+  INACTIVE_SCHOOL_ALERT: 'School Activity Check',
+  WEEKLY_PLATFORM_SUMMARY: 'Platform Summary',
+};
+
 async function resolveTargetNames(
   logs: { targetTable: string | null; targetId: string | null }[]
 ): Promise<Map<string, string>> {
@@ -629,7 +666,7 @@ export async function getAuditLogs(req: AuthRequest, res: Response): Promise<voi
       ? targetName
       : log.targetTable
         ? `${log.targetTable} #${log.targetId?.slice(0, 8) ?? ''}`
-        : '—';
+        : (actionDisplayMap[log.action] ?? '—');
 
     return { ...log, targetName, targetDisplay };
   });
