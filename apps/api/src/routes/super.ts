@@ -6,6 +6,7 @@ import {
   createSchool,
   createSchoolAdmin,
   deleteSchool,
+  getAnalytics,
   getAuditLogs,
   getSchools,
   getStats,
@@ -21,6 +22,7 @@ const router = Router();
 router.use(verifyToken, requireRole('super_admin'));
 
 router.get('/stats', getStats);
+router.get('/analytics', getAnalytics);
 
 router.get('/users', getUsers);
 

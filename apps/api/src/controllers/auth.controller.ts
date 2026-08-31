@@ -83,6 +83,11 @@ export async function login(req: Request, res: Response): Promise<void> {
     return;
   }
 
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { lastLoginAt: new Date() },
+  });
+
   const accessToken = signAccessToken({
     userId: user.id,
     role: user.role,

@@ -28,7 +28,10 @@ interface AuditLogEntry {
   action: string;
   targetTable: string | null;
   targetId: string | null;
+  targetName: string | null;
+  targetDisplay: string;
   createdAt: string;
+  user: { name: string } | null;
 }
 
 const ACTIONS = [
@@ -166,7 +169,7 @@ export default function AuditLogPage() {
                   <TableRow>
                     <TableHead>Action</TableHead>
                     <TableHead>Target</TableHead>
-                    <TableHead>User ID</TableHead>
+                    <TableHead>User</TableHead>
                     <TableHead>Date</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -181,13 +184,9 @@ export default function AuditLogPage() {
                     logs.map((log) => (
                       <TableRow key={log.id}>
                         <TableCell className="font-medium">{log.action}</TableCell>
-                        <TableCell>
-                          {log.targetTable
-                            ? `${log.targetTable}${log.targetId ? ` #${log.targetId.slice(0, 8)}` : ''}`
-                            : '—'}
-                        </TableCell>
+                        <TableCell>{log.targetDisplay}</TableCell>
                         <TableCell className="text-muted-foreground">
-                          {log.userId.slice(0, 8)}
+                          {log.user?.name ?? log.userId.slice(0, 8)}
                         </TableCell>
                         <TableCell className="text-muted-foreground">
                           {new Date(log.createdAt).toLocaleString()}

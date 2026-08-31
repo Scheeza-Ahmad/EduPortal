@@ -18,6 +18,7 @@ interface BackupEntry {
   id: string;
   userId: string;
   createdAt: string;
+  user: { name: string } | null;
 }
 
 export default function BackupPage() {
@@ -86,7 +87,7 @@ export default function BackupPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Triggered By (User ID)</TableHead>
+                  <TableHead>Triggered By</TableHead>
                   <TableHead>Date</TableHead>
                 </TableRow>
               </TableHeader>
@@ -101,7 +102,7 @@ export default function BackupPage() {
                   history.map((entry) => (
                     <TableRow key={entry.id}>
                       <TableCell className="text-muted-foreground">
-                        {entry.userId.slice(0, 8)}
+                        {entry.user?.name ?? 'Unknown'}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {new Date(entry.createdAt).toLocaleString()}

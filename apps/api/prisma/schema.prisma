@@ -58,13 +58,14 @@ enum Wing {
 // ---------------------------------------------------------------
 
 model User {
-  id       String  @id @default(cuid())
-  name     String
-  email    String  @unique
-  password String // bcrypt hash, never returned in API responses
-  role     Role
-  schoolId String? // null for super_admin
-  isActive Boolean @default(true)
+  id          String    @id @default(cuid())
+  name        String
+  email       String    @unique
+  password    String // bcrypt hash, never returned in API responses
+  role        Role
+  schoolId    String? // null for super_admin
+  isActive    Boolean   @default(true)
+  lastLoginAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -7,6 +7,8 @@ import { startPerformanceSnapshot } from './performanceSnapshot';
 import { startDueDateReminder } from './dueDateReminder';
 import { startWeeklyDigest } from './weeklyDigest';
 import { startMonthlyProgress } from './monthlyProgress';
+import { startWeeklyPlatformSummary } from './weeklyPlatformSummary';
+import { startInactiveTeacherAlert } from './inactiveTeacherAlert';
 
 export function startJobs(): void {
   startWeeklyBackup();
@@ -18,7 +20,9 @@ export function startJobs(): void {
   startDueDateReminder();
   startWeeklyDigest();
   startMonthlyProgress();
+  startWeeklyPlatformSummary();
+  startInactiveTeacherAlert();
   console.log(
-    'Cron jobs registered: weeklyBackup, monthlyReport, storageWarning, dueDateLock, ungradedReminder, performanceSnapshot, dueDateReminder, weeklyDigest, monthlyProgress'
+    'Cron jobs registered: weeklyBackup, monthlyReport, storageWarning, dueDateLock, ungradedReminder, performanceSnapshot, dueDateReminder, weeklyDigest, monthlyProgress, weeklyPlatformSummary, inactiveTeacherAlert'
   );
 }
