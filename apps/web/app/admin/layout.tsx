@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { href: '/admin', label: 'Dashboard' },
   { href: '/admin/students', label: 'Students' },
   { href: '/admin/teachers', label: 'Teachers' },
+  { href: '/admin/coordinators', label: 'Coordinators' },
   { href: '/admin/classes', label: 'Classes' },
   { href: '/admin/subjects', label: 'Subjects' },
   { href: '/admin/timetable', label: 'Timetable' },

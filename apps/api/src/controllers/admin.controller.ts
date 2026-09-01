@@ -1507,6 +1507,197 @@ export async function assignCoordinator(req: AuthRequest, res: Response): Promis
 }
 
 // =================================================================
+// Coordinators page (dedicated admin view)
+// =================================================================
+
+export async function getCoordinators(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const coordinators = await prisma.user.findMany({
+    where: { schoolId, role: 'coordinator' },
+    include: {
+      teacherProfile: true,
+      teachingSubjects: { select: { id: true, name: true, class: { select: { id: true, number: true, section: true } } } },
+      classTeacherOf: { select: { id: true, number: true, section: true } },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  send(res, 200, {
+    coordinators: coordinators.map((c) => ({
+      ...stripPassword(c),
+      wingLabel:
+        c.teacherProfile?.coordinatorWing === 'junior'
+          ? 'Junior Wing (Class 1-5)'
+          : c.teacherProfile?.coordinatorWing === 'senior'
+            ? 'Senior Wing (Class 6-10)'
+            : null,
+      classes: [
+        ...c.teachingSubjects.map((s) => `${s.class.number}-${s.class.section}`),
+        ...c.classTeacherOf.map((cl) => `${cl.number}-${cl.section}`),
+      ].filter((v, i, arr) => arr.indexOf(v) === i),
+    })),
+  });
+}
+
+const createCoordinatorSchema = z
+  .object({
+    userId: z.string().optional(),
+    name: z.string().min(1).optional(),
+    email: z.string().email().optional(),
+    password: z.string().min(8).optional(),
+    coordinatorWing: z.enum(['junior', 'senior']),
+  })
+  .refine((data) => data.userId || (data.name && data.email && data.password), {
+    message: 'Either userId, or name+email+password, must be provided',
+  });
+
+export async function createCoordinator(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = createCoordinatorSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid coordinator data');
+    return;
+  }
+  const { userId, name, email, password, coordinatorWing } = parsed.data;
+
+  const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } });
+
+  try {
+    if (userId) {
+      // Promote an existing teacher.
+      const existing = await prisma.user.findFirst({
+        where: { id: userId, schoolId, role: { in: ['teacher', 'coordinator'] } },
+        include: { teacherProfile: true },
+      });
+      if (!existing || !existing.teacherProfile) {
+        send(res, 404, undefined, 'Teacher not found');
+        return;
+      }
+
+      const [user] = await prisma.$transaction([
+        prisma.user.update({ where: { id: userId }, data: { role: 'coordinator' } }),
+        prisma.teacherProfile.update({
+          where: { id: existing.teacherProfile.id },
+          data: { isCoordinator: true, coordinatorWing },
+        }),
+      ]);
+
+      await prisma.notification.create({
+        data: {
+          userId,
+          type: 'ASSIGNED_COORDINATOR',
+          message: `You have been assigned as ${coordinatorWing === 'junior' ? 'Junior' : 'Senior'} Wing Coordinator.`,
+        },
+      });
+
+      await auditLog({
+        userId: req.user!.userId,
+        action: 'ASSIGN_COORDINATOR',
+        targetTable: 'User',
+        targetId: userId,
+        meta: { coordinatorWing, source: 'promoted' },
+        ip: req.ip,
+      });
+
+      try {
+        await sendWelcomeEmail({
+          name: existing.name,
+          email: existing.email,
+          role: 'coordinator',
+          schoolName: school?.name ?? 'your school',
+        });
+      } catch (err) {
+        console.warn('[createCoordinator] Welcome email failed:', err);
+      }
+
+      send(res, 200, stripPassword(user));
+      return;
+    }
+
+    // Create a brand-new coordinator account.
+    const hashedPassword = await bcrypt.hash(password as string, 12);
+    const user = await prisma.user.create({
+      data: {
+        name: name as string,
+        email: email as string,
+        password: hashedPassword,
+        role: 'coordinator',
+        schoolId,
+        teacherProfile: { create: { wing: coordinatorWing, isCoordinator: true, coordinatorWing } },
+      },
+      include: { teacherProfile: true },
+    });
+
+    await auditLog({
+      userId: req.user!.userId,
+      action: 'ASSIGN_COORDINATOR',
+      targetTable: 'User',
+      targetId: user.id,
+      meta: { coordinatorWing, source: 'created' },
+      ip: req.ip,
+    });
+
+    try {
+      await sendWelcomeEmail({
+        name: name as string,
+        email: email as string,
+        role: 'coordinator',
+        schoolName: school?.name ?? 'your school',
+        password,
+      });
+    } catch (err) {
+      console.warn('[createCoordinator] Welcome email failed:', err);
+    }
+
+    send(res, 201, stripPassword(user));
+  } catch (err) {
+    if (isUniqueConstraintError(err)) {
+      send(res, 400, undefined, 'Email already in use');
+      return;
+    }
+    throw err;
+  }
+}
+
+export async function removeCoordinator(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const existing = await prisma.user.findFirst({
+    where: { id: req.params.id, schoolId, role: 'coordinator' },
+    include: { teacherProfile: true },
+  });
+  if (!existing || !existing.teacherProfile) {
+    send(res, 404, undefined, 'Coordinator not found');
+    return;
+  }
+
+  // Demote back to a regular teacher, rather than deactivating the account —
+  // matches the Teachers-page "Remove Coordinator" behavior.
+  await prisma.$transaction([
+    prisma.user.update({ where: { id: existing.id }, data: { role: 'teacher' } }),
+    prisma.teacherProfile.update({
+      where: { id: existing.teacherProfile.id },
+      data: { isCoordinator: false, coordinatorWing: null },
+    }),
+  ]);
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'REMOVE_COORDINATOR',
+    targetTable: 'User',
+    targetId: existing.id,
+    ip: req.ip,
+  });
+
+  send(res, 200, { message: 'Coordinator role removed' });
+}
+
+// =================================================================
 // Wing Reports (submitted by coordinators, reviewed by admin)
 // =================================================================
 

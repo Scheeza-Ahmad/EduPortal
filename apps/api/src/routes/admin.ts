@@ -9,6 +9,7 @@ import {
   createAnnouncement,
   createCalendarDate,
   createClass,
+  createCoordinator,
   createFinanceUser,
   createStudent,
   createSubject,
@@ -24,6 +25,7 @@ import {
   getAnnouncements,
   getCalendar,
   getClasses,
+  getCoordinators,
   getParents,
   getReportCard,
   getStats,
@@ -34,6 +36,7 @@ import {
   getWingReports,
   linkParentChildren,
   rejectWingReport,
+  removeCoordinator,
   updateClass,
   updateStudent,
   updateSubject,
@@ -60,6 +63,11 @@ router.post('/teachers', createTeacher);
 router.patch('/teachers/:id', updateTeacher);
 router.delete('/teachers/:id', deleteTeacher);
 router.patch('/teachers/:id/coordinator', assignCoordinator);
+
+// Coordinators (dedicated admin page)
+router.get('/coordinators', getCoordinators);
+router.post('/coordinators', createCoordinator);
+router.delete('/coordinators/:id', removeCoordinator);
 
 // Classes
 router.get('/classes', getClasses);
