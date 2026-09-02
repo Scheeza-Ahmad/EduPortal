@@ -21,6 +21,17 @@ export async function sendEmail({ to, subject, html, attachments }: SendEmailInp
   const { error } = await resend.emails.send({ from, to, subject, html, attachments });
 
   if (error) {
+    // Resend's sandbox sender (onboarding@resend.dev, or any unverified
+    // domain) only delivers to the account owner's own verified address.
+    // This isn't a bug in this app — surface it as a one-line hint instead
+    // of a stack trace so it's obvious what to do (verify a domain and set
+    // EMAIL_FROM, or test with the account owner's own email as recipient).
+    if (error.message.includes('You can only send testing emails')) {
+      console.warn(
+        `[mailer] Resend sandbox restriction: can't email "${to}" — only the account owner's own address is deliverable until a domain is verified at resend.com/domains and EMAIL_FROM is updated.`
+      );
+      return;
+    }
     throw new Error(`Failed to send email: ${error.message}`);
   }
 }

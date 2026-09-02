@@ -4,7 +4,8 @@ import { prisma } from '../utils/prisma';
 import { send } from '../utils/response';
 import { auditLog } from '../utils/audit';
 import { AuthRequest } from '../middleware/auth';
-import { checkPerfectWeek, checkStreak7, checkTopOfClass } from '../jobs/badgeAward';
+import { checkPerfectWeek, checkStreak30, checkStreak7, checkTopOfClass } from '../jobs/badgeAward';
+import { buildReportCard } from '../services/reportCard';
 
 // ---------------------------------------------------------------
 // Shared helper
@@ -231,6 +232,7 @@ export async function submitActivity(req: AuthRequest, res: Response): Promise<v
   try {
     await Promise.all([
       checkStreak7(profile.id),
+      checkStreak30(profile.id),
       checkPerfectWeek(userId, profile.id),
       checkTopOfClass(activityId, profile.id),
     ]);
@@ -301,40 +303,19 @@ export async function getGrades(req: AuthRequest, res: Response): Promise<void> 
 export async function getGradeCard(req: AuthRequest, res: Response): Promise<void> {
   const profile = await requireStudentProfile(req, res);
   if (!profile) return;
-
-  const grades = await prisma.grade.findMany({
-    where: { studentId: profile.id },
-    include: {
-      submission: { include: { activity: { include: { subject: { select: { id: true, name: true } } } } } },
-    },
-  });
-
-  const bySubject = new Map<string, { subjectName: string; totalMarks: number; totalPossible: number }>();
-  for (const g of grades) {
-    const subject = g.submission.activity.subject;
-    const entry = bySubject.get(subject.id) ?? { subjectName: subject.name, totalMarks: 0, totalPossible: 0 };
-    entry.totalMarks += g.marks;
-    entry.totalPossible += g.submission.activity.totalMarks;
-    bySubject.set(subject.id, entry);
+  const schoolId = req.user!.schoolId;
+  if (!schoolId) {
+    send(res, 403, undefined, 'No school assigned to this account');
+    return;
   }
 
-  const subjectSummary = Array.from(bySubject.entries()).map(([subjectId, s]) => ({
-    subjectId,
-    subjectName: s.subjectName,
-    totalMarks: s.totalMarks,
-    totalPossible: s.totalPossible,
-    percentage: s.totalPossible > 0 ? Math.round((s.totalMarks / s.totalPossible) * 1000) / 10 : 0,
-  }));
+  const report = await buildReportCard(schoolId, req.user!.userId);
+  if (!report) {
+    send(res, 404, undefined, 'Report card not available');
+    return;
+  }
 
-  const overallMarks = subjectSummary.reduce((sum, s) => sum + s.totalMarks, 0);
-  const overallPossible = subjectSummary.reduce((sum, s) => sum + s.totalPossible, 0);
-
-  send(res, 200, {
-    student: { id: profile.userId, rollNo: profile.rollNo, class: profile.class },
-    subjectSummary,
-    overallPercentage:
-      overallPossible > 0 ? Math.round((overallMarks / overallPossible) * 1000) / 10 : 0,
-  });
+  send(res, 200, report);
 }
 
 // =================================================================
@@ -418,13 +399,42 @@ export async function markNotificationRead(req: AuthRequest, res: Response): Pro
 export async function getBadges(req: AuthRequest, res: Response): Promise<void> {
   const profile = await requireStudentProfile(req, res);
   if (!profile) return;
+  const userId = req.user!.userId;
 
-  const badges = await prisma.badge.findMany({
-    where: { studentId: profile.id },
-    orderBy: { awardedAt: 'desc' },
+  const [badges, recentSubmissions] = await Promise.all([
+    prisma.badge.findMany({ where: { studentId: profile.id }, orderBy: { awardedAt: 'desc' } }),
+    prisma.submission.findMany({
+      where: { studentId: profile.id },
+      orderBy: { submittedAt: 'desc' },
+      take: 30,
+      select: { isLate: true },
+    }),
+  ]);
+
+  // Current on-time streak, counting back from the most recent submission.
+  let currentStreak = 0;
+  for (const s of recentSubmissions) {
+    if (s.isLate) break;
+    currentStreak += 1;
+  }
+
+  const weekStart = new Date();
+  const day = weekStart.getDay();
+  weekStart.setDate(weekStart.getDate() - (day === 0 ? 6 : day - 1));
+  weekStart.setHours(0, 0, 0, 0);
+  const weekAttendance = await prisma.attendance.findMany({
+    where: { studentId: userId, date: { gte: weekStart } },
   });
+  const presentThisWeek = weekAttendance.filter((a) => a.status === 'present').length;
 
-  send(res, 200, { badges });
+  send(res, 200, {
+    badges,
+    progress: {
+      currentSubmissionStreak: currentStreak,
+      attendanceMarkedThisWeek: weekAttendance.length,
+      presentThisWeek,
+    },
+  });
 }
 
 // =================================================================
@@ -469,6 +479,84 @@ export async function getMyFees(req: AuthRequest, res: Response): Promise<void> 
       totalDue: f.totalDue,
       paidAmount: f.paidAmount,
       status: f.status,
+    })),
+  });
+}
+
+// =================================================================
+// Leave Requests
+// =================================================================
+
+const createLeaveRequestSchema = z
+  .object({
+    reason: z.string().min(1).max(1000),
+    fromDate: z.coerce.date(),
+    toDate: z.coerce.date(),
+  })
+  .refine((data) => data.fromDate < data.toDate, {
+    message: 'fromDate must be before toDate',
+    path: ['toDate'],
+  });
+
+// POST /api/student/leave-request
+export async function createLeaveRequest(req: AuthRequest, res: Response): Promise<void> {
+  const profile = await requireStudentProfile(req, res);
+  if (!profile) return;
+  const userId = req.user!.userId;
+
+  const parsed = createLeaveRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid leave request — check reason and dates');
+    return;
+  }
+  const { reason, fromDate, toDate } = parsed.data;
+
+  const leaveRequest = await prisma.leaveRequest.create({
+    data: { requesterId: userId, reason, startDate: fromDate, endDate: toDate, status: 'pending' },
+  });
+
+  if (profile.class.classTeacherId) {
+    const student = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
+    await prisma.notification.create({
+      data: {
+        userId: profile.class.classTeacherId,
+        type: 'LEAVE_REQUEST_SUBMITTED',
+        message: `${student?.name ?? 'A student'} requested leave from ${fromDate.toLocaleDateString()} to ${toDate.toLocaleDateString()}.`,
+      },
+    });
+  }
+
+  send(res, 201, leaveRequest);
+}
+
+// GET /api/student/leave-requests
+export async function getMyLeaveRequests(req: AuthRequest, res: Response): Promise<void> {
+  const profile = await requireStudentProfile(req, res);
+  if (!profile) return;
+  const userId = req.user!.userId;
+
+  const requests = await prisma.leaveRequest.findMany({
+    where: { requesterId: userId },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  const reviewerIds = [...new Set(requests.map((r) => r.reviewedBy).filter((id): id is string => Boolean(id)))];
+  const reviewers = reviewerIds.length
+    ? await prisma.user.findMany({ where: { id: { in: reviewerIds } }, select: { id: true, name: true } })
+    : [];
+  const reviewerNameById = new Map(reviewers.map((r) => [r.id, r.name]));
+
+  send(res, 200, {
+    requests: requests.map((r) => ({
+      id: r.id,
+      reason: r.reason,
+      startDate: r.startDate,
+      endDate: r.endDate,
+      status: r.status,
+      reviewNote: r.reviewNote,
+      reviewedByName: r.reviewedBy ? (reviewerNameById.get(r.reviewedBy) ?? null) : null,
+      reviewedAt: r.reviewedAt,
+      createdAt: r.createdAt,
     })),
   });
 }

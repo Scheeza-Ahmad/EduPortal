@@ -10,9 +10,11 @@ function startOfWeek(): Date {
   return monday;
 }
 
+type StreakBadgeType = 'perfect_week' | 'top_of_class' | 'streak_7' | 'streak_30' | 'full_marks';
+
 async function awardIfNotAlready(
   studentProfileId: string,
-  type: 'perfect_week' | 'top_of_class' | 'streak_7',
+  type: StreakBadgeType,
   notAfter: Date
 ): Promise<void> {
   const existing = await prisma.badge.findFirst({
@@ -66,4 +68,27 @@ export async function checkStreak7(studentProfileId: string): Promise<void> {
 
   const streakStart = lastSeven[lastSeven.length - 1].submittedAt;
   await awardIfNotAlready(studentProfileId, 'streak_7', streakStart);
+}
+
+/** streak_30 — last 30 submissions were all on time. */
+export async function checkStreak30(studentProfileId: string): Promise<void> {
+  const lastThirty = await prisma.submission.findMany({
+    where: { studentId: studentProfileId },
+    orderBy: { submittedAt: 'desc' },
+    take: 30,
+  });
+  if (lastThirty.length < 30 || !lastThirty.every((s) => !s.isLate)) return;
+
+  const streakStart = lastThirty[lastThirty.length - 1].submittedAt;
+  await awardIfNotAlready(studentProfileId, 'streak_30', streakStart);
+}
+
+/** full_marks — scored 100% on a graded activity. */
+export async function checkFullMarks(
+  studentProfileId: string,
+  marks: number,
+  totalMarks: number
+): Promise<void> {
+  if (totalMarks <= 0 || marks < totalMarks) return;
+  await prisma.badge.create({ data: { studentId: studentProfileId, type: 'full_marks' } });
 }

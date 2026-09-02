@@ -29,14 +29,14 @@ import {
 
 const router = Router();
 
-// Every finance route requires the finance or school_admin role.
-router.use(verifyToken, requireRole('finance', 'school_admin'));
+// The Finance module is fully separate from the admin panel now — school_admin
+// only creates finance-officer accounts (POST /api/admin/finance/create-user),
+// they don't get into finance data/operations themselves.
+router.use(verifyToken, requireRole('finance'));
 
 router.get('/school-info', getSchoolInfo);
 
-// School Setup — reads and writes are both open to finance/school_admin
-// (router-level check above already covers this; the finance-role setup
-// wizard needs to be able to write these on first login, not just admins).
+// School Setup
 router.get('/setup/settings', getSchoolSettings);
 router.post('/setup/settings', upsertSchoolSettings);
 router.patch('/setup/settings', upsertSchoolSettings);

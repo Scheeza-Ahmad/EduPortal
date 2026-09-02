@@ -7,6 +7,7 @@ import { send } from '../utils/response';
 import { auditLog } from '../utils/audit';
 import { AuthRequest } from '../middleware/auth';
 import { sendWelcomeEmail } from '../jobs/welcomeEmail';
+import { buildReportCard } from '../services/reportCard';
 
 // ---------------------------------------------------------------
 // Shared helpers
@@ -73,6 +74,46 @@ export async function getStats(req: AuthRequest, res: Response): Promise<void> {
     totalClasses,
     totalActivities,
     attendanceRate: Math.round(attendanceRate * 10) / 10,
+  });
+}
+
+// GET /api/admin/stats/trend — last 6 weeks of school-wide attendance, for
+// the dashboard chart.
+export async function getStatsTrend(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const weeks = [];
+  for (let i = 5; i >= 0; i--) {
+    const weekEnd = new Date();
+    weekEnd.setDate(weekEnd.getDate() - i * 7);
+    const weekStart = new Date(weekEnd);
+    weekStart.setDate(weekStart.getDate() - 7);
+
+    const records = await prisma.attendance.findMany({
+      where: { subject: { class: { schoolId } }, date: { gte: weekStart, lt: weekEnd } },
+      select: { status: true },
+    });
+    const rate =
+      records.length > 0
+        ? Math.round((records.filter((a) => a.status === 'present').length / records.length) * 100)
+        : 0;
+    weeks.push({ weekLabel: `Week ${6 - i}`, attendanceRate: rate });
+  }
+
+  // Students per class, for the class-distribution chart.
+  const classes = await prisma.class.findMany({
+    where: { schoolId, isActive: true },
+    select: { number: true, section: true, _count: { select: { studentProfiles: true } } },
+    orderBy: [{ number: 'asc' }, { section: 'asc' }],
+  });
+
+  send(res, 200, {
+    attendanceTrend: weeks,
+    studentsByClass: classes.map((c) => ({
+      classLabel: `${c.number}-${c.section}`,
+      studentCount: c._count.studentProfiles,
+    })),
   });
 }
 
@@ -1140,66 +1181,39 @@ export async function getReportCard(req: AuthRequest, res: Response): Promise<vo
   const schoolId = requireSchoolId(req, res);
   if (!schoolId) return;
 
-  const { studentId } = req.params;
-
-  const student = await prisma.user.findFirst({
-    where: { id: studentId, schoolId, role: 'student' },
-    include: { studentProfile: { include: { class: true } } },
-  });
-  if (!student || !student.studentProfile) {
+  const report = await buildReportCard(schoolId, req.params.studentId);
+  if (!report) {
     send(res, 404, undefined, 'Student not found');
     return;
   }
 
-  const grades = await prisma.grade.findMany({
-    where: { studentId: student.studentProfile.id },
-    include: {
-      submission: {
-        include: { activity: { include: { subject: { select: { id: true, name: true } } } } },
-      },
-    },
-    orderBy: { gradedAt: 'desc' },
-  });
+  send(res, 200, report);
+}
 
-  const bySubject = new Map<string, { subjectName: string; totalMarks: number; totalPossible: number }>();
-  for (const grade of grades) {
-    const subject = grade.submission.activity.subject;
-    const entry = bySubject.get(subject.id) ?? {
-      subjectName: subject.name,
-      totalMarks: 0,
-      totalPossible: 0,
-    };
-    entry.totalMarks += grade.marks;
-    entry.totalPossible += grade.submission.activity.totalMarks;
-    bySubject.set(subject.id, entry);
+// GET /api/admin/report-cards/bulk/:classId
+export async function getBulkReportCards(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const cls = await prisma.class.findFirst({ where: { id: req.params.classId, schoolId } });
+  if (!cls) {
+    send(res, 404, undefined, 'Class not found');
+    return;
   }
 
-  const subjectSummary = Array.from(bySubject.entries()).map(([subjectId, s]) => ({
-    subjectId,
-    subjectName: s.subjectName,
-    totalMarks: s.totalMarks,
-    totalPossible: s.totalPossible,
-    percentage: s.totalPossible > 0 ? Math.round((s.totalMarks / s.totalPossible) * 1000) / 10 : 0,
-  }));
-
-  send(res, 200, {
-    student: {
-      id: student.id,
-      name: student.name,
-      rollNo: student.studentProfile.rollNo,
-      class: student.studentProfile.class,
-    },
-    subjectSummary,
-    grades: grades.map((g) => ({
-      id: g.id,
-      subject: g.submission.activity.subject.name,
-      activityTitle: g.submission.activity.title,
-      marks: g.marks,
-      totalMarks: g.submission.activity.totalMarks,
-      feedback: g.feedback,
-      gradedAt: g.gradedAt,
-    })),
+  const students = await prisma.studentProfile.findMany({
+    where: { classId: cls.id },
+    select: { userId: true },
+    orderBy: { rollNo: 'asc' },
   });
+
+  const reports = [];
+  for (const s of students) {
+    const report = await buildReportCard(schoolId, s.userId);
+    if (report) reports.push(report);
+  }
+
+  send(res, 200, { reports });
 }
 
 // =================================================================
@@ -1564,27 +1578,36 @@ export async function createCoordinator(req: AuthRequest, res: Response): Promis
   }
   const { userId, name, email, password, coordinatorWing } = parsed.data;
 
+  console.log('createCoordinator called', { userId, coordinatorWing, schoolId });
+
   const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } });
 
   try {
     if (userId) {
-      // Promote an existing teacher.
+      // Promote an existing user. No role filter here — a teacher missing a
+      // TeacherProfile row (or with a role the strict in:['teacher','coordinator']
+      // filter excluded) was the actual cause of the false "Teacher not found".
       const existing = await prisma.user.findFirst({
-        where: { id: userId, schoolId, role: { in: ['teacher', 'coordinator'] } },
+        where: { id: userId, schoolId, isActive: true },
         include: { teacherProfile: true },
       });
-      if (!existing || !existing.teacherProfile) {
+      if (!existing) {
         send(res, 404, undefined, 'Teacher not found');
         return;
       }
 
-      const [user] = await prisma.$transaction([
-        prisma.user.update({ where: { id: userId }, data: { role: 'coordinator' } }),
-        prisma.teacherProfile.update({
-          where: { id: existing.teacherProfile.id },
+      if (!existing.teacherProfile) {
+        await prisma.teacherProfile.create({
+          data: { userId: existing.id, wing: coordinatorWing, isCoordinator: true, coordinatorWing },
+        });
+      } else {
+        await prisma.teacherProfile.update({
+          where: { userId: existing.id },
           data: { isCoordinator: true, coordinatorWing },
-        }),
-      ]);
+        });
+      }
+
+      const user = await prisma.user.update({ where: { id: userId }, data: { role: 'coordinator' } });
 
       await prisma.notification.create({
         data: {
@@ -1857,4 +1880,254 @@ export async function createFinanceUser(req: AuthRequest, res: Response): Promis
     }
     throw err;
   }
+}
+
+// =================================================================
+// Leave Requests (school-wide — admin override/final authority)
+// =================================================================
+
+// GET /api/admin/leave-requests?status=&class=&from=&to=
+export async function getAdminLeaveRequests(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const { status, class: classId, from, to } = req.query;
+
+  const requests = await prisma.leaveRequest.findMany({
+    where: {
+      status: status && status !== 'all' ? (String(status) as 'pending' | 'approved' | 'rejected') : undefined,
+      requester: {
+        schoolId,
+        ...(typeof classId === 'string' ? { studentProfile: { classId } } : {}),
+      },
+      ...(from ? { startDate: { gte: new Date(String(from)) } } : {}),
+      ...(to ? { endDate: { lte: new Date(String(to)) } } : {}),
+    },
+    include: {
+      requester: {
+        select: {
+          name: true,
+          role: true,
+          studentProfile: { select: { rollNo: true, class: { select: { id: true, number: true, section: true } } } },
+        },
+      },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  send(res, 200, {
+    requests: requests.map((r) => ({
+      id: r.id,
+      requesterName: r.requester.name,
+      requesterRole: r.requester.role,
+      rollNo: r.requester.studentProfile?.rollNo ?? null,
+      classId: r.requester.studentProfile?.class.id ?? null,
+      classLabel: r.requester.studentProfile
+        ? `${r.requester.studentProfile.class.number}-${r.requester.studentProfile.class.section}`
+        : '—',
+      reason: r.reason,
+      startDate: r.startDate,
+      endDate: r.endDate,
+      status: r.status,
+      reviewNote: r.reviewNote,
+    })),
+  });
+}
+
+const adminReviewLeaveRequestSchema = z.object({
+  action: z.enum(['approved', 'rejected']),
+  reviewNote: z.string().max(1000).optional(),
+});
+
+// PATCH /api/admin/leave-requests/:id/review — final authority; can override a teacher's decision.
+export async function reviewAdminLeaveRequest(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = adminReviewLeaveRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid review data');
+    return;
+  }
+
+  const existing = await prisma.leaveRequest.findFirst({
+    where: { id: req.params.id, requester: { schoolId } },
+    include: { requester: { select: { id: true, name: true } } },
+  });
+  if (!existing) {
+    send(res, 404, undefined, 'Leave request not found');
+    return;
+  }
+
+  const { action, reviewNote } = parsed.data;
+
+  const updated = await prisma.leaveRequest.update({
+    where: { id: existing.id },
+    data: { status: action, reviewNote, reviewedBy: req.user!.userId, reviewedAt: new Date() },
+  });
+
+  const notifyIds = [existing.requesterId, existing.reviewedBy].filter(
+    (id, i, arr): id is string => Boolean(id) && arr.indexOf(id) === i && id !== req.user!.userId
+  );
+  if (notifyIds.length > 0) {
+    await prisma.notification.createMany({
+      data: notifyIds.map((userId) => ({
+        userId,
+        type: 'LEAVE_REQUEST_ADMIN_REVIEWED',
+        message: `${existing.requester.name}'s leave request was ${action} by the school admin.`,
+      })),
+    });
+  }
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'LEAVE_REQUEST_REVIEWED',
+    targetTable: 'LeaveRequest',
+    targetId: updated.id,
+    meta: { action, reviewNote, level: 'admin' },
+    ip: req.ip,
+  });
+
+  send(res, 200, updated);
+}
+
+// =================================================================
+// Consent Forms
+// =================================================================
+
+export async function getConsentForms(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const forms = await prisma.consentForm.findMany({
+    where: { schoolId },
+    include: { _count: { select: { responses: true } } },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  send(res, 200, {
+    forms: forms.map((f) => ({
+      id: f.id,
+      title: f.title,
+      description: f.description,
+      dueDate: f.dueDate,
+      isActive: f.isActive,
+      createdAt: f.createdAt,
+      responseCount: f._count.responses,
+    })),
+  });
+}
+
+const createConsentFormSchema = z.object({
+  title: z.string().min(1).max(200),
+  description: z.string().min(1).max(2000),
+  dueDate: z.coerce.date(),
+});
+
+export async function createConsentForm(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = createConsentFormSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid consent form data');
+    return;
+  }
+
+  const form = await prisma.consentForm.create({
+    data: { schoolId, createdBy: req.user!.userId, ...parsed.data },
+  });
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'CONSENT_FORM_CREATE',
+    targetTable: 'ConsentForm',
+    targetId: form.id,
+    meta: { title: form.title },
+    ip: req.ip,
+  });
+
+  // Notify every parent in this school that a new consent form needs a response.
+  const parents = await prisma.user.findMany({ where: { schoolId, role: 'parent', isActive: true } });
+  if (parents.length > 0) {
+    await prisma.notification.createMany({
+      data: parents.map((p) => ({
+        userId: p.id,
+        type: 'CONSENT_FORM_NEW',
+        message: `New consent form: "${form.title}" — due ${form.dueDate.toLocaleDateString()}.`,
+      })),
+    });
+  }
+
+  send(res, 201, form);
+}
+
+export async function deleteConsentForm(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const existing = await prisma.consentForm.findFirst({ where: { id: req.params.id, schoolId } });
+  if (!existing) {
+    send(res, 404, undefined, 'Consent form not found');
+    return;
+  }
+
+  await prisma.consentForm.update({ where: { id: existing.id }, data: { isActive: false } });
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'CONSENT_FORM_DELETE',
+    targetTable: 'ConsentForm',
+    targetId: existing.id,
+    ip: req.ip,
+  });
+
+  send(res, 200, { message: 'Consent form deactivated' });
+}
+
+export async function getConsentFormResponses(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const form = await prisma.consentForm.findFirst({ where: { id: req.params.id, schoolId } });
+  if (!form) {
+    send(res, 404, undefined, 'Consent form not found');
+    return;
+  }
+
+  const [responses, allParents] = await Promise.all([
+    prisma.consentResponse.findMany({
+      where: { consentFormId: form.id },
+      orderBy: { respondedAt: 'desc' },
+    }),
+    prisma.parentProfile.findMany({
+      where: { user: { schoolId, isActive: true } },
+      include: {
+        user: { select: { id: true, name: true } },
+        children: { select: { id: true, user: { select: { name: true } } } },
+      },
+    }),
+  ]);
+
+  const respondedByKey = new Map(responses.map((r) => [`${r.parentId}:${r.studentId}`, r]));
+
+  // Build one row per parent-child pair so "pending" rows show up too, not
+  // just the ones who already responded.
+  const rows = allParents.flatMap((parent) =>
+    parent.children.map((child) => {
+      const existing = respondedByKey.get(`${parent.userId}:${child.id}`);
+      return {
+        parentName: parent.user.name,
+        studentName: child.user.name,
+        response: existing ? (existing.approved ? 'approved' : 'rejected') : 'pending',
+        notes: existing?.notes ?? null,
+        respondedAt: existing?.respondedAt ?? null,
+      };
+    })
+  );
+
+  send(res, 200, {
+    form: { id: form.id, title: form.title, dueDate: form.dueDate },
+    responses: rows,
+  });
 }

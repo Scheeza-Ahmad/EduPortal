@@ -1,6 +1,8 @@
 import { Response } from 'express';
+import { z } from 'zod';
 import { prisma } from '../utils/prisma';
 import { send } from '../utils/response';
+import { auditLog } from '../utils/audit';
 import { AuthRequest } from '../middleware/auth';
 import { generateProgressReportPdf } from '../services/progressReportPdf';
 
@@ -374,4 +376,128 @@ export async function getChildFees(req: AuthRequest, res: Response): Promise<voi
       status: f.status,
     })),
   });
+}
+
+// =================================================================
+// Notifications — includes direct messages from a child's teacher
+// (Notification.type === 'TEACHER_MESSAGE')
+// =================================================================
+
+export async function getParentNotifications(req: AuthRequest, res: Response): Promise<void> {
+  const userId = req.user!.userId;
+
+  const notifications = await prisma.notification.findMany({
+    where: { userId },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  send(res, 200, { notifications });
+}
+
+export async function markParentNotificationRead(req: AuthRequest, res: Response): Promise<void> {
+  const userId = req.user!.userId;
+  const { id } = req.params;
+
+  const existing = await prisma.notification.findFirst({ where: { id, userId } });
+  if (!existing) {
+    send(res, 404, undefined, 'Notification not found');
+    return;
+  }
+
+  const updated = await prisma.notification.update({ where: { id }, data: { isRead: true } });
+  send(res, 200, updated);
+}
+
+// =================================================================
+// Consent Forms
+// =================================================================
+
+// GET /api/parent/consent-forms — one row per (form, child) pair.
+export async function getParentConsentForms(req: AuthRequest, res: Response): Promise<void> {
+  const profile = await requireParentProfile(req, res);
+  if (!profile) return;
+  const schoolId = req.user!.schoolId;
+  if (!schoolId || profile.children.length === 0) {
+    send(res, 200, { forms: [] });
+    return;
+  }
+
+  const [forms, responses] = await Promise.all([
+    prisma.consentForm.findMany({ where: { schoolId, isActive: true }, orderBy: { dueDate: 'asc' } }),
+    prisma.consentResponse.findMany({
+      where: { parentId: req.user!.userId, studentId: { in: profile.children.map((c) => c.id) } },
+    }),
+  ]);
+
+  const responseByKey = new Map(responses.map((r) => [`${r.consentFormId}:${r.studentId}`, r]));
+
+  const rows = forms.flatMap((form) =>
+    profile.children.map((child) => {
+      const existing = responseByKey.get(`${form.id}:${child.id}`);
+      return {
+        formId: form.id,
+        title: form.title,
+        description: form.description,
+        dueDate: form.dueDate,
+        isExpired: form.dueDate.getTime() < Date.now(),
+        studentId: child.id,
+        studentName: child.user.name,
+        status: existing ? (existing.approved ? 'approved' : 'rejected') : 'pending',
+        notes: existing?.notes ?? null,
+      };
+    })
+  );
+
+  send(res, 200, { forms: rows });
+}
+
+const respondConsentFormSchema = z.object({
+  studentId: z.string().min(1),
+  approved: z.boolean(),
+  notes: z.string().max(1000).optional(),
+});
+
+// POST /api/parent/consent-forms/:id/respond
+export async function respondToConsentForm(req: AuthRequest, res: Response): Promise<void> {
+  const profile = await requireParentProfile(req, res);
+  if (!profile) return;
+
+  const parsed = respondConsentFormSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid consent response');
+    return;
+  }
+  const { studentId, approved, notes } = parsed.data;
+
+  const child = findChild(profile, studentId);
+  if (!child) {
+    send(res, 404, undefined, 'Child not found');
+    return;
+  }
+
+  const schoolId = req.user!.schoolId;
+  const form = await prisma.consentForm.findFirst({
+    where: { id: req.params.id, schoolId: schoolId ?? undefined, isActive: true },
+  });
+  if (!form) {
+    send(res, 404, undefined, 'Consent form not found');
+    return;
+  }
+
+  const response = await prisma.consentResponse.upsert({
+    where: { consentFormId_studentId: { consentFormId: form.id, studentId } },
+    update: { approved, notes, respondedAt: new Date() },
+    create: { consentFormId: form.id, parentId: req.user!.userId, studentId, approved, notes },
+  });
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'CONSENT_FORM_RESPOND',
+    targetTable: 'ConsentResponse',
+    targetId: response.id,
+    meta: { consentFormId: form.id, studentId, approved },
+    ip: req.ip,
+  });
+
+  send(res, 200, response);
 }

@@ -49,6 +49,16 @@ interface FeeDefaulter {
   status: 'unpaid' | 'overdue';
 }
 
+interface LeaveRequestRow {
+  id: string;
+  studentName: string;
+  classLabel: string;
+  startDate: string;
+  endDate: string;
+  reason: string;
+  status: 'pending' | 'approved' | 'rejected';
+}
+
 export default function TeacherDashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(true);
@@ -56,6 +66,8 @@ export default function TeacherDashboardPage() {
 
   const [defaulters, setDefaulters] = useState<FeeDefaulter[]>([]);
   const [defaultersMonth, setDefaultersMonth] = useState('');
+
+  const [pendingLeaveRequests, setPendingLeaveRequests] = useState<LeaveRequestRow[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -80,6 +92,15 @@ export default function TeacherDashboardPage() {
         if (cancelled) return;
         setDefaultersMonth(res.data.data.monthYear);
         setDefaulters(res.data.data.defaulters);
+      })
+      .catch(() => {});
+
+    api
+      .get<{ success: boolean; data: { requests: LeaveRequestRow[] } }>('/api/teacher/leave-requests', {
+        params: { status: 'pending' },
+      })
+      .then((res) => {
+        if (!cancelled) setPendingLeaveRequests(res.data.data.requests);
       })
       .catch(() => {});
 
@@ -279,6 +300,33 @@ export default function TeacherDashboardPage() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="flex-row items-center justify-between space-y-0">
+          <CardTitle className="text-base">Pending Leave Requests</CardTitle>
+          <Link href="/teacher/leave-requests" className="text-sm text-primary hover:underline">
+            View all →
+          </Link>
+        </CardHeader>
+        <CardContent>
+          {pendingLeaveRequests.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No pending leave requests.</p>
+          ) : (
+            <div className="space-y-2">
+              {pendingLeaveRequests.slice(0, 5).map((r) => (
+                <div key={r.id} className="flex items-center justify-between text-sm">
+                  <span>
+                    {r.studentName} <span className="text-muted-foreground">({r.classLabel})</span>
+                  </span>
+                  <span className="text-muted-foreground">
+                    {new Date(r.startDate).toLocaleDateString()} – {new Date(r.endDate).toLocaleDateString()}
+                  </span>
+                </div>
+              ))}
             </div>
           )}
         </CardContent>

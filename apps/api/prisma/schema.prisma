@@ -41,6 +41,8 @@ enum BadgeType {
   perfect_week
   top_of_class
   streak_7
+  streak_30
+  full_marks
 }
 
 enum LeaveStatus {
@@ -171,6 +173,7 @@ model School {
 
   monthlyReports MonthlyReport[]
   wingReports    WingReport[]
+  consentForms   ConsentForm[]
 
   @@index([adminId])
 }
@@ -426,6 +429,7 @@ model LeaveRequest {
   status      LeaveStatus @default(pending)
   reviewedBy  String?
   reviewedAt  DateTime?
+  reviewNote  String?
 
   createdAt DateTime @default(now())
 
@@ -677,4 +681,39 @@ model WingReport {
   @@index([schoolId])
   @@index([coordinatorId])
   @@index([status])
+}
+
+// ---------------------------------------------------------------
+// Consent Forms
+// ---------------------------------------------------------------
+
+model ConsentForm {
+  id          String   @id @default(cuid())
+  schoolId    String
+  title       String
+  description String
+  dueDate     DateTime
+  createdBy   String // admin userId
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  school    School            @relation(fields: [schoolId], references: [id])
+  responses ConsentResponse[]
+
+  @@index([schoolId])
+}
+
+model ConsentResponse {
+  id            String   @id @default(cuid())
+  consentFormId String
+  parentId      String
+  studentId     String
+  approved      Boolean
+  notes         String?
+  respondedAt   DateTime @default(now())
+
+  consentForm ConsentForm @relation(fields: [consentFormId], references: [id])
+
+  @@unique([consentFormId, studentId])
+  @@index([consentFormId])
 }

@@ -3,7 +3,6 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { AxiosError } from 'axios';
 import { api } from '@/lib/api';
-import { useAuthStore } from '@/lib/store';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -44,8 +43,6 @@ function getErrorMessage(err: unknown, fallback: string): string {
 }
 
 export default function FinanceSetupPage() {
-  const isAdmin = useAuthStore((s) => s.user?.role === 'school_admin');
-
   return (
     <div className="space-y-6">
       <h1 className="text-xl font-semibold">Finance Setup</h1>
@@ -54,7 +51,6 @@ export default function FinanceSetupPage() {
           <TabsTrigger value="settings">School Settings</TabsTrigger>
           <TabsTrigger value="late-fee">Late Fee Rule</TabsTrigger>
           <TabsTrigger value="discounts">Discount Policies</TabsTrigger>
-          {isAdmin && <TabsTrigger value="team">Finance Team</TabsTrigger>}
         </TabsList>
         <TabsContent value="settings" className="pt-4">
           <SettingsTab />
@@ -65,11 +61,6 @@ export default function FinanceSetupPage() {
         <TabsContent value="discounts" className="pt-4">
           <DiscountPoliciesTab />
         </TabsContent>
-        {isAdmin && (
-          <TabsContent value="team" className="pt-4">
-            <FinanceTeamTab />
-          </TabsContent>
-        )}
       </Tabs>
     </div>
   );
@@ -304,77 +295,6 @@ function LateFeeTab() {
           )}
           <Button type="submit" disabled={saving}>
             {saving ? 'Saving...' : 'Save Rule'}
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
-  );
-}
-
-function FinanceTeamTab() {
-  const [form, setForm] = useState({ name: '', email: '', password: '' });
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setSuccess(null);
-    setSubmitting(true);
-    try {
-      await api.post('/api/admin/finance/create-user', form);
-      setSuccess(`Finance account created for ${form.email}. A welcome email has been sent.`);
-      setForm({ name: '', email: '', password: '' });
-    } catch (err) {
-      setError(getErrorMessage(err, 'Failed to create finance user.'));
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Add Finance Team Member</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit} className="max-w-md space-y-4">
-          <div className="space-y-2">
-            <Label>Name</Label>
-            <Input
-              required
-              value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>Email</Label>
-            <Input
-              type="email"
-              required
-              value={form.email}
-              onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>Password</Label>
-            <Input
-              type="password"
-              required
-              minLength={8}
-              value={form.password}
-              onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-            />
-          </div>
-          {success && <p className="text-sm text-green-700">{success}</p>}
-          {error && (
-            <p className="text-sm text-destructive" role="alert">
-              {error}
-            </p>
-          )}
-          <Button type="submit" disabled={submitting}>
-            {submitting ? 'Creating...' : 'Create Finance Account'}
           </Button>
         </form>
       </CardContent>

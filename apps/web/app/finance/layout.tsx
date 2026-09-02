@@ -3,7 +3,7 @@
 import { ReactNode, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Menu, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
@@ -17,10 +17,11 @@ const NAV_ITEMS = [
   { href: '/finance/reports', label: 'Reports' },
 ];
 
-// Shared by both the 'finance' role (their home) and 'school_admin' (reached
-// via the "Finance" link in the admin panel) — the backend enforces this
-// same pairing on every /api/finance endpoint.
-const ALLOWED_ROLES = ['finance', 'school_admin'];
+// The Finance portal is now exclusively for the 'finance' role — school_admin
+// only creates finance-officer accounts from /admin/finance-officer and has
+// no access to finance data itself. The backend enforces the same on every
+// /api/finance endpoint.
+const ALLOWED_ROLES = ['finance'];
 
 export default function FinanceLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -29,9 +30,11 @@ export default function FinanceLayout({ children }: { children: ReactNode }) {
   const [checkingSession, setCheckingSession] = useState(true);
   const [checkingSetup, setCheckingSetup] = useState(true);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   useEffect(() => {
     setPendingHref(null);
+    setMobileNavOpen(false);
   }, [pathname]);
 
   useEffect(() => {
@@ -131,8 +134,25 @@ export default function FinanceLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen">
-      <aside className="w-56 shrink-0 border-r bg-muted/20 p-4">
-        <div className="mb-6 px-2 text-lg font-semibold">EduPortal Finance</div>
+      {mobileNavOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+          onClick={() => setMobileNavOpen(false)}
+        />
+      )}
+
+      <aside
+        className={cn(
+          'fixed inset-y-0 left-0 z-50 w-64 shrink-0 -translate-x-full border-r bg-muted/20 p-4 transition-transform duration-200 lg:static lg:w-56 lg:translate-x-0',
+          mobileNavOpen && 'translate-x-0'
+        )}
+      >
+        <div className="mb-6 flex items-center justify-between px-2">
+          <span className="text-lg font-semibold">EduPortal Finance</span>
+          <button className="lg:hidden" onClick={() => setMobileNavOpen(false)} aria-label="Close menu">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
         <nav className="space-y-1">
           {NAV_ITEMS.map((item) => {
             const isActive = pendingHref
@@ -162,28 +182,22 @@ export default function FinanceLayout({ children }: { children: ReactNode }) {
             );
           })}
         </nav>
-
-        {user?.role === 'school_admin' && (
-          <div className="mt-6 border-t pt-4">
-            <Link
-              href="/admin"
-              className="flex items-center rounded-md px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-            >
-              ← Back to Admin Panel
-            </Link>
-          </div>
-        )}
       </aside>
 
       <div className="flex min-h-screen flex-1 flex-col">
-        <header className="flex items-center justify-between border-b px-6 py-3">
-          <span className="text-sm font-medium">{user?.name ?? 'Finance'}</span>
+        <header className="flex items-center justify-between border-b px-4 py-3 sm:px-6">
+          <div className="flex items-center gap-3">
+            <button className="lg:hidden" onClick={() => setMobileNavOpen(true)} aria-label="Open menu">
+              <Menu className="h-5 w-5" />
+            </button>
+            <span className="text-sm font-medium">{user?.name ?? 'Finance'}</span>
+          </div>
           <Button variant="outline" size="sm" onClick={handleLogout}>
             Logout
           </Button>
         </header>
 
-        <main className="flex-1 p-6">{children}</main>
+        <main className="flex-1 p-4 sm:p-6">{children}</main>
       </div>
     </div>
   );

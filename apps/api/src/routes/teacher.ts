@@ -10,6 +10,7 @@ import {
   getActivity,
   getAttendanceForDate,
   getAttendanceReport,
+  getClassFees,
   getDashboard,
   getFeeDefaulters,
   getMonthlyReport,
@@ -18,9 +19,12 @@ import {
   getMySubjects,
   getReusableActivities,
   getSubmissions,
+  getTeacherLeaveRequests,
   gradeSubmission,
   markAttendance,
+  messageParent,
   publishActivity,
+  reviewTeacherLeaveRequest,
   submitMonthlyReport,
   updateActivity,
   upsertMonthlyReport,
@@ -28,10 +32,15 @@ import {
 
 const router = Router();
 
-router.use(verifyToken, requireRole('teacher'));
+// A coordinator is still a teacher — they keep their own subjects, mark
+// their own attendance, and submit their own monthly report — so they need
+// full access here too, not just to /api/coordinator.
+router.use(verifyToken, requireRole('teacher', 'coordinator'));
 
 router.get('/dashboard', getDashboard);
 router.get('/fee-defaulters', getFeeDefaulters);
+router.get('/class-fees', getClassFees);
+router.post('/students/:studentId/message-parent', messageParent);
 
 // Monthly report
 router.get('/monthly-report/:monthYear', getMonthlyReport);
@@ -64,5 +73,9 @@ router.get('/classes', getMyClasses);
 router.get('/announcements', getMyClassAnnouncements);
 router.post('/announcements', createTeacherAnnouncement);
 router.delete('/announcements/:id', deleteTeacherAnnouncement);
+
+// Leave Requests
+router.get('/leave-requests', getTeacherLeaveRequests);
+router.patch('/leave-requests/:id/review', reviewTeacherLeaveRequest);
 
 export default router;

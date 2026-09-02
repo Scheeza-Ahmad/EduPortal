@@ -9,6 +9,7 @@ import {
   createAnnouncement,
   createCalendarDate,
   createClass,
+  createConsentForm,
   createCoordinator,
   createFinanceUser,
   createStudent,
@@ -17,18 +18,24 @@ import {
   deleteAnnouncement,
   deleteCalendarDate,
   deleteClass,
+  deleteConsentForm,
   deleteStudent,
   deleteSubject,
   deleteTeacher,
   deleteTimetableSlot,
   createParent,
+  getAdminLeaveRequests,
   getAnnouncements,
+  getBulkReportCards,
   getCalendar,
   getClasses,
+  getConsentFormResponses,
+  getConsentForms,
   getCoordinators,
   getParents,
   getReportCard,
   getStats,
+  getStatsTrend,
   getStudents,
   getSubjects,
   getTeachers,
@@ -37,6 +44,7 @@ import {
   linkParentChildren,
   rejectWingReport,
   removeCoordinator,
+  reviewAdminLeaveRequest,
   updateClass,
   updateStudent,
   updateSubject,
@@ -49,6 +57,7 @@ const router = Router();
 router.use(verifyToken, requireRole('school_admin'));
 
 router.get('/stats', getStats);
+router.get('/stats/trend', getStatsTrend);
 
 // Students
 router.get('/students', getStudents);
@@ -93,7 +102,9 @@ router.get('/announcements', getAnnouncements);
 router.post('/announcements', createAnnouncement);
 router.delete('/announcements/:id', deleteAnnouncement);
 
-// Report cards
+// Report cards — /bulk/:classId must come before /:studentId so "bulk" isn't
+// swallowed as a studentId value.
+router.get('/report-cards/bulk/:classId', getBulkReportCards);
 router.get('/report-cards/:studentId', getReportCard);
 
 // Academic calendar
@@ -113,5 +124,16 @@ router.post('/finance/create-user', createFinanceUser);
 router.get('/wing-reports', getWingReports);
 router.patch('/wing-reports/:id/approve', approveWingReport);
 router.patch('/wing-reports/:id/reject', rejectWingReport);
+
+// Leave requests
+router.get('/leave-requests', getAdminLeaveRequests);
+router.patch('/leave-requests/:id/review', reviewAdminLeaveRequest);
+
+// Consent forms — /:id/responses must come before nothing conflicting here
+// since DELETE and GET on /:id don't overlap with /:id/responses.
+router.get('/consent-forms', getConsentForms);
+router.post('/consent-forms', createConsentForm);
+router.delete('/consent-forms/:id', deleteConsentForm);
+router.get('/consent-forms/:id/responses', getConsentFormResponses);
 
 export default router;

@@ -1,7 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { pdf } from '@react-pdf/renderer';
 import { api } from '@/lib/api';
+import { ReportCardPdfDocument, ReportCardData } from '@/lib/reportCardPdf';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Table,
@@ -12,18 +15,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 
-interface SubjectSummary {
-  subjectId: string;
-  subjectName: string;
-  totalMarks: number;
-  totalPossible: number;
-  percentage: number;
-}
-
-interface GradeCard {
-  subjectSummary: SubjectSummary[];
-  overallPercentage: number;
-}
+type GradeCard = ReportCardData;
 
 interface GradeEntry {
   id: string;
@@ -60,12 +52,37 @@ export default function StudentGradesPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  const [downloading, setDownloading] = useState(false);
+
+  async function handleDownload() {
+    if (!gradeCard) return;
+    setDownloading(true);
+    try {
+      const blob = await pdf(<ReportCardPdfDocument {...gradeCard} />).toBlob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ReportCard-${gradeCard.student.name}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   if (loading) return <p className="text-sm text-muted-foreground">Loading grades...</p>;
   if (error) return <p className="text-sm text-destructive">{error}</p>;
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold">Grades</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold">Grades</h1>
+        <Button size="sm" disabled={!gradeCard || downloading} onClick={handleDownload}>
+          {downloading ? 'Preparing...' : 'Download Report Card'}
+        </Button>
+      </div>
 
       <Card>
         <CardHeader>
@@ -79,7 +96,7 @@ export default function StudentGradesPage() {
             </span>
           </p>
 
-          {!gradeCard || gradeCard.subjectSummary.length === 0 ? (
+          {!gradeCard || gradeCard.subjects.length === 0 ? (
             <p className="text-sm text-muted-foreground">No graded work yet.</p>
           ) : (
             <Table>
@@ -88,16 +105,18 @@ export default function StudentGradesPage() {
                   <TableHead>Subject</TableHead>
                   <TableHead>Marks</TableHead>
                   <TableHead>Percentage</TableHead>
+                  <TableHead>Grade</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {gradeCard.subjectSummary.map((s) => (
-                  <TableRow key={s.subjectId}>
+                {gradeCard.subjects.map((s) => (
+                  <TableRow key={s.subjectName}>
                     <TableCell className="font-medium">{s.subjectName}</TableCell>
                     <TableCell>
-                      {s.totalMarks} / {s.totalPossible}
+                      {s.obtainedMarks} / {s.totalMarks}
                     </TableCell>
                     <TableCell>{s.percentage}%</TableCell>
+                    <TableCell>{s.grade}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

@@ -1,5 +1,12 @@
 import 'dotenv/config';
 import express from 'express';
+// Patches Express so a rejected promise inside an async route handler is
+// forwarded to errorHandler automatically. Without this (plain Express 4),
+// a thrown/rejected error in any `async function` handler just hangs the
+// request until the frontend's axios timeout — which is what was showing up
+// as generic "Failed to load ___" errors across the app. Must be imported
+// right after express, before any router/route is defined.
+import 'express-async-errors';
 import helmet from 'helmet';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';

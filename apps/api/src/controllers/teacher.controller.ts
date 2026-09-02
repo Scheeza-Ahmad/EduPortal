@@ -7,7 +7,7 @@ import { AuthRequest } from '../middleware/auth';
 import { checkAbsenceStreak } from '../jobs/absenceStreak';
 import { notifyParentOfAbsence } from '../jobs/absenceNotify';
 import { checkLowGrade } from '../jobs/lowGradeAlert';
-import { checkTopOfClass } from '../jobs/badgeAward';
+import { checkFullMarks, checkPerfectWeek, checkTopOfClass } from '../jobs/badgeAward';
 
 // ---------------------------------------------------------------
 // Shared helpers
@@ -32,6 +32,7 @@ async function findOwnActivity(teacherId: string, activityId: string) {
 
 export async function getDashboard(req: AuthRequest, res: Response): Promise<void> {
   const teacherId = req.user!.userId;
+  console.log('[teacher dashboard] starting...', { teacherId });
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -41,7 +42,11 @@ export async function getDashboard(req: AuthRequest, res: Response): Promise<voi
   const in7Days = new Date(today);
   in7Days.setDate(in7Days.getDate() + 7);
 
-  const [mySubjects, ungradedCount, upcomingActivities, recentAuditLogs] = await Promise.all([
+  // Promise.allSettled (not Promise.all) so one failing section degrades to
+  // an empty default instead of taking the whole dashboard down with it —
+  // this endpoint never actually touched TeacherProfile, so that wasn't the
+  // real risk here; a genuinely failing query in any one branch was.
+  const [subjectsResult, ungradedResult, upcomingResult, auditResult] = await Promise.allSettled([
     prisma.subject.findMany({
       where: { teacherId, isActive: true },
       include: { class: { select: { id: true, number: true, section: true, wing: true } } },
@@ -66,14 +71,35 @@ export async function getDashboard(req: AuthRequest, res: Response): Promise<voi
     }),
   ]);
 
-  const attendanceToday = await Promise.all(
-    mySubjects.map(async (subject) => {
-      const marked = await prisma.attendance.findFirst({
-        where: { subjectId: subject.id, date: { gte: today, lt: tomorrow } },
-      });
-      return { subjectId: subject.id, subjectName: subject.name, marked: Boolean(marked) };
-    })
-  );
+  if (subjectsResult.status === 'rejected') console.error('[teacher dashboard] mySubjects failed', subjectsResult.reason);
+  if (ungradedResult.status === 'rejected') console.error('[teacher dashboard] ungradedCount failed', ungradedResult.reason);
+  if (upcomingResult.status === 'rejected') console.error('[teacher dashboard] upcomingActivities failed', upcomingResult.reason);
+  if (auditResult.status === 'rejected') console.error('[teacher dashboard] recentAuditLogs failed', auditResult.reason);
+
+  const mySubjects = subjectsResult.status === 'fulfilled' ? subjectsResult.value : [];
+  const ungradedCount = ungradedResult.status === 'fulfilled' ? ungradedResult.value : 0;
+  const upcomingActivities = upcomingResult.status === 'fulfilled' ? upcomingResult.value : [];
+  const recentAuditLogs = auditResult.status === 'fulfilled' ? auditResult.value : [];
+
+  let attendanceToday: { subjectId: string; subjectName: string; marked: boolean }[] = [];
+  try {
+    attendanceToday = await Promise.all(
+      mySubjects.map(async (subject) => {
+        const marked = await prisma.attendance.findFirst({
+          where: { subjectId: subject.id, date: { gte: today, lt: tomorrow } },
+        });
+        return { subjectId: subject.id, subjectName: subject.name, marked: Boolean(marked) };
+      })
+    );
+  } catch (err) {
+    console.error('[teacher dashboard] attendanceToday failed', err);
+  }
+
+  console.log('[teacher dashboard] done', {
+    subjects: mySubjects.length,
+    ungradedCount,
+    upcoming: upcomingActivities.length,
+  });
 
   send(res, 200, {
     mySubjects,
@@ -361,6 +387,7 @@ export async function gradeSubmission(req: AuthRequest, res: Response): Promise<
     await Promise.all([
       checkLowGrade(submission.studentId, marks, submission.activity.totalMarks),
       checkTopOfClass(submission.activityId, submission.studentId),
+      checkFullMarks(submission.studentId, marks, submission.activity.totalMarks),
     ]);
   } catch (err) {
     console.warn('[gradeSubmission] Post-grade checks failed:', err);
@@ -475,6 +502,19 @@ export async function markAttendance(req: AuthRequest, res: Response): Promise<v
     ...absentStudentIds.map((studentId) => checkAbsenceStreak(studentId, subjectId, teacherId)),
     ...absentStudentIds.map((studentId) => notifyParentOfAbsence(studentId, subjectId)),
   ]);
+
+  // Perfect-week badge check for everyone just marked (idempotent — see
+  // awardIfNotAlready — so re-marking the same day is harmless).
+  try {
+    const studentUserIds = records.map((r) => r.studentId);
+    const profiles = await prisma.studentProfile.findMany({
+      where: { userId: { in: studentUserIds } },
+      select: { id: true, userId: true },
+    });
+    await Promise.all(profiles.map((p) => checkPerfectWeek(p.userId, p.id)));
+  } catch (err) {
+    console.warn('[markAttendance] perfect_week check failed:', err);
+  }
 
   send(res, 200, { message: 'Attendance marked' });
 }
@@ -698,6 +738,128 @@ export async function getFeeDefaulters(req: AuthRequest, res: Response): Promise
 }
 
 // =================================================================
+// Class Fees — full fee/challan view for students in the teacher's classes
+// GET /api/teacher/class-fees?monthYear=2026-09
+// =================================================================
+
+export async function getClassFees(req: AuthRequest, res: Response): Promise<void> {
+  const teacherId = req.user!.userId;
+  const now = new Date();
+  const monthYear =
+    typeof req.query.monthYear === 'string'
+      ? req.query.monthYear
+      : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+  const myClasses = await prisma.class.findMany({
+    where: { OR: [{ subjects: { some: { teacherId } } }, { classTeacherId: teacherId }] },
+    select: { id: true },
+  });
+  const classIds = myClasses.map((c) => c.id);
+  if (classIds.length === 0) {
+    send(res, 200, { monthYear, fees: [] });
+    return;
+  }
+
+  const fees = await prisma.studentFee.findMany({
+    where: { feeStructure: { monthYear }, student: { studentProfile: { classId: { in: classIds } } } },
+    include: {
+      student: {
+        select: {
+          name: true,
+          studentProfile: {
+            select: { id: true, rollNo: true, class: { select: { number: true, section: true } } },
+          },
+        },
+      },
+      feeStructure: { select: { dueDate: true } },
+    },
+    orderBy: { totalDue: 'desc' },
+  });
+
+  send(res, 200, {
+    monthYear,
+    fees: fees.map((f) => ({
+      id: f.id,
+      studentProfileId: f.student.studentProfile?.id ?? null,
+      studentName: f.student.name,
+      rollNo: f.student.studentProfile?.rollNo ?? '—',
+      classNumber: f.student.studentProfile?.class.number ?? null,
+      section: f.student.studentProfile?.class.section ?? null,
+      dueDate: f.feeStructure.dueDate,
+      baseFee: f.baseFee,
+      discountAmount: f.discountAmount,
+      netPayable: f.netPayable,
+      lateFine: f.lateFine,
+      totalDue: f.totalDue,
+      paidAmount: f.paidAmount,
+      status: f.status,
+    })),
+  });
+}
+
+// =================================================================
+// Message a student's parent directly
+// POST /api/teacher/students/:studentId/message-parent
+// (:studentId is StudentProfile.id)
+// =================================================================
+
+const messageParentSchema = z.object({
+  message: z.string().min(1).max(1000),
+});
+
+export async function messageParent(req: AuthRequest, res: Response): Promise<void> {
+  const teacherId = req.user!.userId;
+
+  const parsed = messageParentSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Message is required');
+    return;
+  }
+
+  // Verify this student is actually in one of the teacher's classes —
+  // a teacher can only message parents of their own students.
+  const myClasses = await prisma.class.findMany({
+    where: { OR: [{ subjects: { some: { teacherId } } }, { classTeacherId: teacherId }] },
+    select: { id: true },
+  });
+  const classIds = myClasses.map((c) => c.id);
+
+  const student = await prisma.studentProfile.findFirst({
+    where: { id: req.params.studentId, classId: { in: classIds } },
+    include: { user: { select: { name: true } }, parent: { select: { userId: true } } },
+  });
+  if (!student) {
+    send(res, 404, undefined, 'Student not found in your classes');
+    return;
+  }
+  if (!student.parent) {
+    send(res, 404, undefined, 'This student has no linked parent account');
+    return;
+  }
+
+  const teacher = await prisma.user.findUnique({ where: { id: teacherId }, select: { name: true } });
+
+  const notification = await prisma.notification.create({
+    data: {
+      userId: student.parent.userId,
+      type: 'TEACHER_MESSAGE',
+      message: `${teacher?.name ?? 'A teacher'} (re: ${student.user.name}): ${parsed.data.message}`,
+    },
+  });
+
+  await auditLog({
+    userId: teacherId,
+    action: 'TEACHER_MESSAGE_PARENT',
+    targetTable: 'Notification',
+    targetId: notification.id,
+    meta: { studentId: student.id },
+    ip: req.ip,
+  });
+
+  send(res, 201, notification);
+}
+
+// =================================================================
 // Monthly Report
 // =================================================================
 
@@ -868,4 +1030,132 @@ export async function submitMonthlyReport(req: AuthRequest, res: Response): Prom
   });
 
   send(res, 200, report);
+}
+
+// =================================================================
+// Leave Requests — reviewing requests from students in the teacher's classes
+// =================================================================
+
+/** Classes this teacher has a subject in, or is the class teacher for. */
+async function getMyClassIds(teacherId: string): Promise<string[]> {
+  const classes = await prisma.class.findMany({
+    where: { OR: [{ subjects: { some: { teacherId } } }, { classTeacherId: teacherId }] },
+    select: { id: true },
+  });
+  return classes.map((c) => c.id);
+}
+
+// GET /api/teacher/leave-requests?status=pending&class=<classId>
+export async function getTeacherLeaveRequests(req: AuthRequest, res: Response): Promise<void> {
+  const teacherId = req.user!.userId;
+  const classIds = await getMyClassIds(teacherId);
+  if (classIds.length === 0) {
+    send(res, 200, { requests: [] });
+    return;
+  }
+
+  const { status, class: classFilter } = req.query;
+  const filteredClassIds =
+    typeof classFilter === 'string' && classIds.includes(classFilter) ? [classFilter] : classIds;
+
+  const requests = await prisma.leaveRequest.findMany({
+    where: {
+      status: status && status !== 'all' ? (String(status) as 'pending' | 'approved' | 'rejected') : undefined,
+      requester: { studentProfile: { classId: { in: filteredClassIds } } },
+    },
+    include: {
+      requester: {
+        select: {
+          name: true,
+          studentProfile: { select: { rollNo: true, class: { select: { id: true, number: true, section: true } } } },
+        },
+      },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  send(res, 200, {
+    requests: requests.map((r) => ({
+      id: r.id,
+      studentName: r.requester.name,
+      rollNo: r.requester.studentProfile?.rollNo ?? '—',
+      classId: r.requester.studentProfile?.class.id ?? null,
+      classLabel: r.requester.studentProfile
+        ? `${r.requester.studentProfile.class.number}-${r.requester.studentProfile.class.section}`
+        : '—',
+      reason: r.reason,
+      startDate: r.startDate,
+      endDate: r.endDate,
+      status: r.status,
+      reviewNote: r.reviewNote,
+    })),
+  });
+}
+
+const reviewLeaveRequestSchema = z.object({
+  action: z.enum(['approved', 'rejected']),
+  reviewNote: z.string().max(1000).optional(),
+});
+
+// PATCH /api/teacher/leave-requests/:id/review
+export async function reviewTeacherLeaveRequest(req: AuthRequest, res: Response): Promise<void> {
+  const teacherId = req.user!.userId;
+
+  const parsed = reviewLeaveRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid review data');
+    return;
+  }
+
+  const classIds = await getMyClassIds(teacherId);
+  const existing = await prisma.leaveRequest.findFirst({
+    where: { id: req.params.id, requester: { studentProfile: { classId: { in: classIds } } } },
+    include: { requester: { select: { id: true, name: true, schoolId: true } } },
+  });
+  if (!existing) {
+    send(res, 404, undefined, 'Leave request not found');
+    return;
+  }
+
+  const { action, reviewNote } = parsed.data;
+
+  const updated = await prisma.leaveRequest.update({
+    where: { id: existing.id },
+    data: { status: action, reviewNote, reviewedBy: teacherId, reviewedAt: new Date() },
+  });
+
+  await prisma.notification.create({
+    data: {
+      userId: existing.requesterId,
+      type: 'LEAVE_REQUEST_REVIEWED',
+      message: `Your leave request (${new Date(existing.startDate).toLocaleDateString()} - ${new Date(existing.endDate).toLocaleDateString()}) was ${action}.`,
+    },
+  });
+
+  if (action === 'approved' && existing.requester.schoolId) {
+    const school = await prisma.school.findUnique({
+      where: { id: existing.requester.schoolId },
+      select: { adminId: true },
+    });
+    if (school?.adminId) {
+      await prisma.notification.create({
+        data: {
+          userId: school.adminId,
+          type: 'LEAVE_REQUEST_APPROVED',
+          message: `${existing.requester.name}'s leave request was approved by their teacher.`,
+        },
+      });
+    }
+  }
+
+  await auditLog({
+    userId: teacherId,
+    action: 'LEAVE_REQUEST_REVIEWED',
+    targetTable: 'LeaveRequest',
+    targetId: updated.id,
+    meta: { action, reviewNote },
+    ip: req.ip,
+  });
+
+  send(res, 200, updated);
 }

@@ -1,7 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { pdf } from '@react-pdf/renderer';
 import { api } from '@/lib/api';
+import { ReportCardPdfDocument, ReportCardData } from '@/lib/reportCardPdf';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Table,
@@ -35,28 +38,16 @@ interface StudentOption {
   studentProfile: { rollNo: string } | null;
 }
 
-interface SubjectSummary {
-  subjectId: string;
-  subjectName: string;
-  totalMarks: number;
-  totalPossible: number;
-  percentage: number;
-}
-
-interface GradeEntry {
-  id: string;
-  subject: string;
-  activityTitle: string;
-  marks: number;
-  totalMarks: number;
-  feedback: string | null;
-  gradedAt: string;
-}
-
-interface ReportCard {
-  student: { id: string; name: string; rollNo: string; class: ClassOption };
-  subjectSummary: SubjectSummary[];
-  grades: GradeEntry[];
+async function downloadReportCard(report: ReportCardData) {
+  const blob = await pdf(<ReportCardPdfDocument {...report} />).toBlob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `ReportCard-${report.student.name}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 export default function ReportCardsPage() {
@@ -64,11 +55,13 @@ export default function ReportCardsPage() {
   const [selectedClassId, setSelectedClassId] = useState('');
   const [students, setStudents] = useState<StudentOption[]>([]);
   const [selectedStudentId, setSelectedStudentId] = useState('');
-  const [report, setReport] = useState<ReportCard | null>(null);
+  const [report, setReport] = useState<ReportCardData | null>(null);
 
   const [loadingStudents, setLoadingStudents] = useState(false);
   const [loadingReport, setLoadingReport] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadingAll, setDownloadingAll] = useState(false);
 
   useEffect(() => {
     api
@@ -107,11 +100,39 @@ export default function ReportCardsPage() {
     setError(null);
 
     api
-      .get<{ success: boolean; data: ReportCard }>(`/api/admin/report-cards/${selectedStudentId}`)
+      .get<{ success: boolean; data: ReportCardData }>(`/api/admin/report-cards/${selectedStudentId}`)
       .then((res) => setReport(res.data.data))
       .catch(() => setError('Failed to load report card.'))
       .finally(() => setLoadingReport(false));
   }, [selectedStudentId]);
+
+  async function handleDownload() {
+    if (!report) return;
+    setDownloading(true);
+    try {
+      await downloadReportCard(report);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  async function handleDownloadAll() {
+    if (!selectedClassId) return;
+    setDownloadingAll(true);
+    try {
+      const res = await api.get<{ success: boolean; data: { reports: ReportCardData[] } }>(
+        `/api/admin/report-cards/bulk/${selectedClassId}`
+      );
+      for (const r of res.data.data.reports) {
+        // eslint-disable-next-line no-await-in-loop
+        await downloadReportCard(r);
+      }
+    } catch {
+      setError('Failed to generate bulk report cards.');
+    } finally {
+      setDownloadingAll(false);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -159,6 +180,14 @@ export default function ReportCardsPage() {
               </SelectContent>
             </Select>
           </div>
+
+          <Button
+            variant="outline"
+            disabled={!selectedClassId || downloadingAll}
+            onClick={handleDownloadAll}
+          >
+            {downloadingAll ? 'Generating...' : 'Download All (Bulk)'}
+          </Button>
         </CardContent>
       </Card>
 
@@ -171,34 +200,50 @@ export default function ReportCardsPage() {
       ) : (
         <>
           <Card>
-            <CardHeader>
-              <CardTitle className="text-base">{report.student.name}</CardTitle>
-              <p className="text-sm text-muted-foreground">
-                Roll No {report.student.rollNo} · {classLabel(report.student.class)}
-              </p>
+            <CardHeader className="flex-row items-center justify-between space-y-0">
+              <div>
+                <CardTitle className="text-base">{report.student.name}</CardTitle>
+                <p className="text-sm text-muted-foreground">
+                  Roll No {report.student.rollNo} · Class {report.student.class}-{report.student.section}
+                </p>
+              </div>
+              <Button size="sm" disabled={downloading} onClick={handleDownload}>
+                {downloading ? 'Preparing...' : 'Download PDF'}
+              </Button>
             </CardHeader>
             <CardContent>
-              {report.subjectSummary.length === 0 ? (
+              {report.subjects.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No graded work yet.</p>
               ) : (
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Subject</TableHead>
+                      <TableHead>Teacher</TableHead>
                       <TableHead>Marks</TableHead>
                       <TableHead>Percentage</TableHead>
+                      <TableHead>Grade</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {report.subjectSummary.map((s) => (
-                      <TableRow key={s.subjectId}>
+                    {report.subjects.map((s) => (
+                      <TableRow key={s.subjectName}>
                         <TableCell className="font-medium">{s.subjectName}</TableCell>
+                        <TableCell className="text-muted-foreground">{s.teacherName}</TableCell>
                         <TableCell>
-                          {s.totalMarks} / {s.totalPossible}
+                          {s.obtainedMarks} / {s.totalMarks}
                         </TableCell>
                         <TableCell>{s.percentage}%</TableCell>
+                        <TableCell>{s.grade}</TableCell>
                       </TableRow>
                     ))}
+                    <TableRow>
+                      <TableCell className="font-semibold">OVERALL</TableCell>
+                      <TableCell />
+                      <TableCell />
+                      <TableCell className="font-semibold">{report.overallPercentage}%</TableCell>
+                      <TableCell className="font-semibold">{report.overallGrade}</TableCell>
+                    </TableRow>
                   </TableBody>
                 </Table>
               )}
@@ -207,41 +252,11 @@ export default function ReportCardsPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">All Graded Activities</CardTitle>
+              <CardTitle className="text-base">Attendance</CardTitle>
             </CardHeader>
-            <CardContent>
-              {report.grades.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No graded activities yet.</p>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Activity</TableHead>
-                      <TableHead>Subject</TableHead>
-                      <TableHead>Marks</TableHead>
-                      <TableHead>Feedback</TableHead>
-                      <TableHead>Date</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {report.grades.map((g) => (
-                      <TableRow key={g.id}>
-                        <TableCell className="font-medium">{g.activityTitle}</TableCell>
-                        <TableCell>{g.subject}</TableCell>
-                        <TableCell>
-                          {g.marks} / {g.totalMarks}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {g.feedback ?? '—'}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {new Date(g.gradedAt).toLocaleDateString()}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
+            <CardContent className="text-sm text-muted-foreground">
+              Total Days: {report.attendance.totalDays} · Present: {report.attendance.presentDays} · Rate:{' '}
+              {report.attendance.percentage}%
             </CardContent>
           </Card>
         </>

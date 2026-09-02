@@ -8,6 +8,17 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 
 interface Stats {
   totalStudents: number;
@@ -15,6 +26,11 @@ interface Stats {
   totalClasses: number;
   totalActivities: number;
   attendanceRate: number;
+}
+
+interface TrendData {
+  attendanceTrend: { weekLabel: string; attendanceRate: number }[];
+  studentsByClass: { classLabel: string; studentCount: number }[];
 }
 
 const STAT_CARDS: { key: keyof Stats; label: string; suffix?: string }[] = [
@@ -42,6 +58,7 @@ function getErrorMessage(err: unknown, fallback: string): string {
 
 export default function AdminDashboardPage() {
   const [stats, setStats] = useState<Stats | null>(null);
+  const [trend, setTrend] = useState<TrendData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,6 +76,13 @@ export default function AdminDashboardPage() {
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
+
+    api
+      .get<{ success: boolean; data: TrendData }>('/api/admin/stats/trend')
+      .then((res) => {
+        if (!cancelled) setTrend(res.data.data);
+      })
+      .catch(() => {});
 
     return () => {
       cancelled = true;
@@ -102,6 +126,50 @@ export default function AdminDashboardPage() {
             </CardContent>
           </Card>
         ))}
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Attendance Trend (Last 6 Weeks)</CardTitle>
+          </CardHeader>
+          <CardContent className="h-64">
+            {!trend || trend.attendanceTrend.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No attendance data yet.</p>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={trend.attendanceTrend}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+                  <XAxis dataKey="weekLabel" tick={{ fontSize: 12 }} />
+                  <YAxis tick={{ fontSize: 12 }} domain={[0, 100]} />
+                  <Tooltip formatter={(v: number) => `${v}%`} />
+                  <Line type="monotone" dataKey="attendanceRate" name="Attendance %" stroke="#0b0b0b" strokeWidth={2} />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Students by Class</CardTitle>
+          </CardHeader>
+          <CardContent className="h-64">
+            {!trend || trend.studentsByClass.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No classes yet.</p>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={trend.studentsByClass}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+                  <XAxis dataKey="classLabel" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
+                  <Tooltip />
+                  <Bar dataKey="studentCount" name="Students" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       <CoordinatorReportsSection />

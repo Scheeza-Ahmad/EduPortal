@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { verifyToken } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import {
+  createLeaveRequest,
   getActivities,
   getAttendance,
   getBadges,
@@ -9,6 +10,7 @@ import {
   getGradeCard,
   getGrades,
   getMyFees,
+  getMyLeaveRequests,
   getNotifications,
   getSubmissions,
   markNotificationRead,
@@ -37,5 +39,8 @@ router.patch('/notifications/:id/read', markNotificationRead);
 router.get('/badges', getBadges);
 
 router.get('/fees', getMyFees);
+
+router.post('/leave-request', createLeaveRequest);
+router.get('/leave-requests', getMyLeaveRequests);
 
 export default router;

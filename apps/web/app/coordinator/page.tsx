@@ -142,11 +142,11 @@ export default function CoordinatorDashboardPage() {
   return (
     <div className="space-y-6">
       {/* Row 1 — Welcome banner */}
-      <div className="rounded-lg bg-indigo-950 p-5 text-white">
+      <div className="rounded-lg bg-zinc-900 p-5 text-white">
         <h1 className="text-lg font-semibold">
           Welcome, {userName ?? 'Coordinator'} — {data.wingLabel.split(' (')[0]} Coordinator
         </h1>
-        <p className="mt-1 text-sm text-indigo-200">
+        <p className="mt-1 text-sm text-zinc-300">
           {data.wingLabel} | {monthYearLabel()}
         </p>
       </div>

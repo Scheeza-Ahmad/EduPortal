@@ -10,6 +10,10 @@ import {
   getChildReportCard,
   getChildTimetable,
   getChildren,
+  getParentConsentForms,
+  getParentNotifications,
+  markParentNotificationRead,
+  respondToConsentForm,
 } from '../controllers/parent.controller';
 
 const router = Router();
@@ -27,5 +31,11 @@ router.get('/child/:studentId/attendance', getChildAttendance);
 router.get('/child/:studentId/timetable', getChildTimetable);
 router.get('/child/:studentId/announcements', getChildAnnouncements);
 router.get('/child/:studentId/fees', getChildFees);
+
+router.get('/notifications', getParentNotifications);
+router.patch('/notifications/:id/read', markParentNotificationRead);
+
+router.get('/consent-forms', getParentConsentForms);
+router.post('/consent-forms/:id/respond', respondToConsentForm);
 
 export default router;
