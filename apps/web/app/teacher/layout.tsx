@@ -7,23 +7,27 @@ import { Loader2, Menu, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
+import { useLanguage } from '@/lib/LanguageContext';
+import { t } from '@/lib/translations';
 import { Button } from '@/components/ui/button';
+import { PortalToggles } from '@/components/portal-toggles';
 
 const NAV_ITEMS = [
-  { href: '/teacher', label: 'Dashboard' },
-  { href: '/teacher/activities', label: 'Activities' },
-  { href: '/teacher/attendance', label: 'Attendance' },
-  { href: '/teacher/classes', label: 'My Classes' },
-  { href: '/teacher/announcements', label: 'Announcements' },
-  { href: '/teacher/monthly-report', label: 'Monthly Report' },
-  { href: '/teacher/class-fees', label: 'Class Fees' },
-  { href: '/teacher/leave-requests', label: 'Leave Requests' },
+  { href: '/teacher', key: 'dashboard' as const },
+  { href: '/teacher/activities', key: 'activities' as const },
+  { href: '/teacher/attendance', key: 'attendance' as const },
+  { href: '/teacher/classes', key: 'myClasses' as const },
+  { href: '/teacher/announcements', key: 'announcements' as const },
+  { href: '/teacher/monthly-report', key: 'monthlyReport' as const },
+  { href: '/teacher/class-fees', key: 'classFees' as const },
+  { href: '/teacher/leave-requests', key: 'leaveRequests' as const },
 ];
 
 export default function TeacherLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { accessToken, user, setAuth, clearAuth } = useAuthStore();
+  const { language } = useLanguage();
   const [checkingSession, setCheckingSession] = useState(true);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -131,7 +135,7 @@ export default function TeacherLayout({ children }: { children: ReactNode }) {
                     : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 )}
               >
-                <span>{item.label}</span>
+                <span>{t(item.key, language)}</span>
                 {isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               </Link>
             );
@@ -140,19 +144,24 @@ export default function TeacherLayout({ children }: { children: ReactNode }) {
       </aside>
 
       <div className="flex min-h-screen flex-1 flex-col">
-        <header className="flex items-center justify-between border-b px-4 py-3 sm:px-6">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 sm:px-6">
           <div className="flex items-center gap-3">
             <button className="lg:hidden" onClick={() => setMobileNavOpen(true)} aria-label="Open menu">
               <Menu className="h-5 w-5" />
             </button>
             <span className="text-sm font-medium">{user?.name ?? 'Teacher'}</span>
           </div>
-          <Button variant="outline" size="sm" onClick={handleLogout}>
-            Logout
-          </Button>
+          <div className="flex items-center gap-2">
+            <PortalToggles />
+            <Button variant="outline" size="sm" onClick={handleLogout}>
+              {t('logout', language)}
+            </Button>
+          </div>
         </header>
 
-        <main className="flex-1 p-4 sm:p-6">{children}</main>
+        <main className="flex-1 p-4 sm:p-6" dir={language === 'ur' ? 'rtl' : 'ltr'}>
+          {children}
+        </main>
       </div>
     </div>
   );

@@ -8,7 +8,10 @@ import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import { useParentStore, Child } from '@/lib/parentStore';
+import { useLanguage } from '@/lib/LanguageContext';
+import { t } from '@/lib/translations';
 import { Button } from '@/components/ui/button';
+import { PortalToggles } from '@/components/portal-toggles';
 import {
   Select,
   SelectContent,
@@ -18,15 +21,15 @@ import {
 } from '@/components/ui/select';
 
 const NAV_ITEMS = [
-  { href: '/parent', label: 'Dashboard' },
-  { href: '/parent/grades', label: 'Grades' },
-  { href: '/parent/attendance', label: 'Attendance' },
-  { href: '/parent/fees', label: 'Fees' },
-  { href: '/parent/messages', label: 'Messages' },
-  { href: '/parent/consent-forms', label: 'Consent Forms' },
-  { href: '/parent/timetable', label: 'Timetable' },
-  { href: '/parent/announcements', label: 'Announcements' },
-  { href: '/parent/report-card', label: 'Report Card' },
+  { href: '/parent', key: 'dashboard' as const },
+  { href: '/parent/grades', key: 'grades' as const },
+  { href: '/parent/attendance', key: 'attendance' as const },
+  { href: '/parent/fees', key: 'fees' as const },
+  { href: '/parent/messages', key: 'messages' as const },
+  { href: '/parent/consent-forms', key: 'consentForms' as const },
+  { href: '/parent/timetable', key: 'timetable' as const },
+  { href: '/parent/announcements', key: 'announcements' as const },
+  { href: '/parent/report-card', key: 'reportCard' as const },
 ];
 
 export default function ParentLayout({ children }: { children: ReactNode }) {
@@ -34,6 +37,7 @@ export default function ParentLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { accessToken, user, setAuth, clearAuth } = useAuthStore();
   const { children: kids, selectedChildId, setChildren, selectChild } = useParentStore();
+  const { language } = useLanguage();
   const [checkingSession, setCheckingSession] = useState(true);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -151,7 +155,7 @@ export default function ParentLayout({ children }: { children: ReactNode }) {
                     : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 )}
               >
-                <span>{item.label}</span>
+                <span>{t(item.key, language)}</span>
                 {isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               </Link>
             );
@@ -182,12 +186,15 @@ export default function ParentLayout({ children }: { children: ReactNode }) {
               </Select>
             )}
           </div>
-          <Button variant="outline" size="sm" onClick={handleLogout}>
-            Logout
-          </Button>
+          <div className="flex items-center gap-2">
+            <PortalToggles />
+            <Button variant="outline" size="sm" onClick={handleLogout}>
+              {t('logout', language)}
+            </Button>
+          </div>
         </header>
 
-        <main className="flex-1 p-4 sm:p-6">
+        <main className="flex-1 p-4 sm:p-6" dir={language === 'ur' ? 'rtl' : 'ltr'}>
           {kids.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               No children are linked to your account yet. Contact your school admin.

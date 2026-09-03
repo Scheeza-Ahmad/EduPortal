@@ -7,23 +7,28 @@ import { Loader2, Menu, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
+import { useLanguage } from '@/lib/LanguageContext';
+import { t } from '@/lib/translations';
 import { Button } from '@/components/ui/button';
+import { PortalToggles } from '@/components/portal-toggles';
 
 const NAV_ITEMS = [
-  { href: '/student', label: 'Dashboard' },
-  { href: '/student/activities', label: 'Activities' },
-  { href: '/student/grades', label: 'Grades' },
-  { href: '/student/attendance', label: 'Attendance' },
-  { href: '/student/fees', label: 'Fees' },
-  { href: '/student/leave-request', label: 'Leave' },
-  { href: '/student/badges', label: 'Badges' },
-  { href: '/student/notifications', label: 'Notifications' },
+  { href: '/student', key: 'dashboard' as const },
+  { href: '/student/activities', key: 'activities' as const },
+  { href: '/student/grades', key: 'grades' as const },
+  { href: '/student/attendance', key: 'attendance' as const },
+  { href: '/student/fees', key: 'fees' as const },
+  { href: '/student/leave-request', key: 'leave' as const },
+  { href: '/student/badges', key: 'badges' as const },
+  { href: '/student/insights', key: 'insights' as const, icon: '🤖' },
+  { href: '/student/notifications', key: 'notifications' as const },
 ];
 
 export default function StudentLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { accessToken, user, setAuth, clearAuth } = useAuthStore();
+  const { language } = useLanguage();
   const [checkingSession, setCheckingSession] = useState(true);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -131,7 +136,10 @@ export default function StudentLayout({ children }: { children: ReactNode }) {
                     : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 )}
               >
-                <span>{item.label}</span>
+                <span>
+                  {item.icon ? `${item.icon} ` : ''}
+                  {t(item.key, language)}
+                </span>
                 {isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               </Link>
             );
@@ -140,19 +148,24 @@ export default function StudentLayout({ children }: { children: ReactNode }) {
       </aside>
 
       <div className="flex min-h-screen flex-1 flex-col">
-        <header className="flex items-center justify-between border-b px-4 py-3 sm:px-6">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 sm:px-6">
           <div className="flex items-center gap-3">
             <button className="lg:hidden" onClick={() => setMobileNavOpen(true)} aria-label="Open menu">
               <Menu className="h-5 w-5" />
             </button>
             <span className="text-sm font-medium">{user?.name ?? 'Student'}</span>
           </div>
-          <Button variant="outline" size="sm" onClick={handleLogout}>
-            Logout
-          </Button>
+          <div className="flex items-center gap-2">
+            <PortalToggles />
+            <Button variant="outline" size="sm" onClick={handleLogout}>
+              {t('logout', language)}
+            </Button>
+          </div>
         </header>
 
-        <main className="flex-1 p-4 sm:p-6">{children}</main>
+        <main className="flex-1 p-4 sm:p-6" dir={language === 'ur' ? 'rtl' : 'ltr'}>
+          {children}
+        </main>
       </div>
     </div>
   );

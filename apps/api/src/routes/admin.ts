@@ -26,12 +26,14 @@ import {
   createParent,
   getAdminLeaveRequests,
   getAnnouncements,
+  getAtRiskStudents,
   getBulkReportCards,
   getCalendar,
   getClasses,
   getConsentFormResponses,
   getConsentForms,
   getCoordinators,
+  globalSearch,
   getParents,
   getReportCard,
   getStats,
@@ -135,5 +137,9 @@ router.get('/consent-forms', getConsentForms);
 router.post('/consent-forms', createConsentForm);
 router.delete('/consent-forms/:id', deleteConsentForm);
 router.get('/consent-forms/:id/responses', getConsentFormResponses);
+
+// AI / analytics
+router.get('/at-risk-students', getAtRiskStudents);
+router.get('/search', globalSearch);
 
 export default router;

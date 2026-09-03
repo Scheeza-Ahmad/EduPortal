@@ -7,14 +7,17 @@ import { Loader2, Menu, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
+import { useLanguage } from '@/lib/LanguageContext';
+import { t } from '@/lib/translations';
 import { Button } from '@/components/ui/button';
+import { PortalToggles } from '@/components/portal-toggles';
 
 const NAV_ITEMS = [
-  { href: '/finance', label: 'Dashboard' },
-  { href: '/finance/setup', label: 'Setup' },
-  { href: '/finance/fee-structure', label: 'Fee Structure' },
-  { href: '/finance/student-fees', label: 'Student Fees' },
-  { href: '/finance/reports', label: 'Reports' },
+  { href: '/finance', key: 'dashboard' as const },
+  { href: '/finance/setup', key: 'setup' as const },
+  { href: '/finance/fee-structure', key: 'feeStructure' as const },
+  { href: '/finance/student-fees', key: 'studentFees' as const },
+  { href: '/finance/reports', key: 'reports' as const },
 ];
 
 // The Finance portal is now exclusively for the 'finance' role — school_admin
@@ -27,6 +30,7 @@ export default function FinanceLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { accessToken, user, setAuth, clearAuth } = useAuthStore();
+  const { language } = useLanguage();
   const [checkingSession, setCheckingSession] = useState(true);
   const [checkingSetup, setCheckingSetup] = useState(true);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
@@ -176,7 +180,7 @@ export default function FinanceLayout({ children }: { children: ReactNode }) {
                     : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 )}
               >
-                <span>{item.label}</span>
+                <span>{t(item.key, language)}</span>
                 {isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               </Link>
             );
@@ -185,19 +189,24 @@ export default function FinanceLayout({ children }: { children: ReactNode }) {
       </aside>
 
       <div className="flex min-h-screen flex-1 flex-col">
-        <header className="flex items-center justify-between border-b px-4 py-3 sm:px-6">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 sm:px-6">
           <div className="flex items-center gap-3">
             <button className="lg:hidden" onClick={() => setMobileNavOpen(true)} aria-label="Open menu">
               <Menu className="h-5 w-5" />
             </button>
             <span className="text-sm font-medium">{user?.name ?? 'Finance'}</span>
           </div>
-          <Button variant="outline" size="sm" onClick={handleLogout}>
-            Logout
-          </Button>
+          <div className="flex items-center gap-2">
+            <PortalToggles />
+            <Button variant="outline" size="sm" onClick={handleLogout}>
+              {t('logout', language)}
+            </Button>
+          </div>
         </header>
 
-        <main className="flex-1 p-4 sm:p-6">{children}</main>
+        <main className="flex-1 p-4 sm:p-6" dir={language === 'ur' ? 'rtl' : 'ltr'}>
+          {children}
+        </main>
       </div>
     </div>
   );

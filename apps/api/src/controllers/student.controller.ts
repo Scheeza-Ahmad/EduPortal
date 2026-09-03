@@ -560,3 +560,131 @@ export async function getMyLeaveRequests(req: AuthRequest, res: Response): Promi
     })),
   });
 }
+
+// =================================================================
+// AI Weak Areas Summary
+// GET /api/student/ai-insights
+// =================================================================
+
+type Trend = 'improving' | 'declining' | 'stable';
+
+function computeTrend(percentagesChronological: number[]): Trend {
+  if (percentagesChronological.length < 2) return 'stable';
+  const lastThree = percentagesChronological.slice(-3);
+  const previousThree = percentagesChronological.slice(-6, -3);
+  if (previousThree.length === 0) return 'stable';
+  const lastAvg = lastThree.reduce((a, b) => a + b, 0) / lastThree.length;
+  const prevAvg = previousThree.reduce((a, b) => a + b, 0) / previousThree.length;
+  const diff = lastAvg - prevAvg;
+  if (diff > 3) return 'improving';
+  if (diff < -3) return 'declining';
+  return 'stable';
+}
+
+export async function getAiInsights(req: AuthRequest, res: Response): Promise<void> {
+  const profile = await requireStudentProfile(req, res);
+  if (!profile) return;
+
+  const grades = await prisma.grade.findMany({
+    where: { studentId: profile.id },
+    orderBy: { gradedAt: 'asc' },
+    include: {
+      submission: {
+        include: {
+          activity: { select: { type: true, totalMarks: true, subject: { select: { id: true, name: true } } } },
+        },
+      },
+    },
+  });
+
+  if (grades.length < 3) {
+    send(res, 200, { insights: null, reason: 'Complete more activities for AI insights' });
+    return;
+  }
+
+  interface SubjectBucket {
+    subjectName: string;
+    percentages: number[];
+    typeTotals: Map<string, { sum: number; count: number }>;
+  }
+  const bySubject = new Map<string, SubjectBucket>();
+
+  const overallPercentages: number[] = [];
+
+  for (const g of grades) {
+    const activity = g.submission.activity;
+    const pct = activity.totalMarks > 0 ? (g.marks / activity.totalMarks) * 100 : 0;
+    overallPercentages.push(pct);
+
+    const subject = activity.subject;
+    const bucket: SubjectBucket = bySubject.get(subject.id) ?? {
+      subjectName: subject.name,
+      percentages: [],
+      typeTotals: new Map(),
+    };
+    bucket.percentages.push(pct);
+    const typeEntry = bucket.typeTotals.get(activity.type) ?? { sum: 0, count: 0 };
+    typeEntry.sum += pct;
+    typeEntry.count += 1;
+    bucket.typeTotals.set(activity.type, typeEntry);
+    bySubject.set(subject.id, bucket);
+  }
+
+  const subjectInsights = Array.from(bySubject.values()).map((bucket) => {
+    const percentage = Math.round((bucket.percentages.reduce((a, b) => a + b, 0) / bucket.percentages.length) * 10) / 10;
+    const trend = computeTrend(bucket.percentages);
+    let weakestType = 'assignment';
+    let weakestAvg = Infinity;
+    for (const [type, entry] of bucket.typeTotals) {
+      const avg = entry.sum / entry.count;
+      if (avg < weakestAvg) {
+        weakestAvg = avg;
+        weakestType = type;
+      }
+    }
+    return {
+      subjectName: bucket.subjectName,
+      percentage,
+      trend,
+      activitiesCount: bucket.percentages.length,
+      weakestType,
+      recentScores: bucket.percentages.slice(-5).map((p) => Math.round(p * 10) / 10),
+    };
+  });
+
+  subjectInsights.sort((a, b) => b.percentage - a.percentage);
+
+  const overallPercentage = Math.round((overallPercentages.reduce((a, b) => a + b, 0) / overallPercentages.length) * 10) / 10;
+  const overallTrend = computeTrend(overallPercentages);
+
+  const bestSubject = subjectInsights[0];
+  const weakestSubject = subjectInsights[subjectInsights.length - 1];
+
+  // Late-submission rate, for the generic "submit on time" recommendation.
+  const submissions = await prisma.submission.findMany({ where: { studentId: profile.id }, select: { isLate: true } });
+  const lateRate = submissions.length > 0 ? submissions.filter((s) => s.isLate).length / submissions.length : 0;
+
+  const recommendations: string[] = [];
+  for (const s of subjectInsights) {
+    if (s.percentage < 60) {
+      recommendations.push(`Focus more on ${s.weakestType} preparation in ${s.subjectName}`);
+    } else if (s.trend === 'improving') {
+      recommendations.push(`Your ${s.subjectName} scores are improving — keep it up!`);
+    }
+  }
+  if (lateRate > 0.2) {
+    recommendations.push('Assignment completion rate is low — try to submit on time.');
+  }
+  if (recommendations.length === 0) {
+    recommendations.push("You're doing well across all subjects — keep up the consistent effort!");
+  }
+
+  send(res, 200, {
+    overallPercentage,
+    overallTrend,
+    bestSubject: bestSubject ? { name: bestSubject.subjectName, percentage: bestSubject.percentage } : null,
+    weakestSubject: weakestSubject ? { name: weakestSubject.subjectName, percentage: weakestSubject.percentage } : null,
+    subjectInsights,
+    recommendations: recommendations.slice(0, 5),
+  });
+}

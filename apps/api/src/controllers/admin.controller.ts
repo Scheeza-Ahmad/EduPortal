@@ -2131,3 +2131,232 @@ export async function getConsentFormResponses(req: AuthRequest, res: Response): 
     responses: rows,
   });
 }
+
+// =================================================================
+// Predictive Dropout Risk
+// GET /api/admin/at-risk-students
+// =================================================================
+
+function riskLevelFor(score: number): 'high' | 'medium' | 'low' {
+  if (score >= 70) return 'high';
+  if (score >= 40) return 'medium';
+  return 'low';
+}
+
+export async function getAtRiskStudents(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const students = await prisma.studentProfile.findMany({
+    where: { user: { schoolId, isActive: true } },
+    select: {
+      id: true,
+      userId: true,
+      class: { select: { id: true, number: true, section: true } },
+      user: { select: { name: true } },
+    },
+  });
+  if (students.length === 0) {
+    send(res, 200, []);
+    return;
+  }
+
+  const studentUserIds = students.map((s) => s.userId);
+  const studentProfileIds = students.map((s) => s.id);
+  const classIds = [...new Set(students.map((s) => s.class.id))];
+
+  const [attendanceRecords, grades, submissionCounts, activitiesByClass] = await Promise.all([
+    prisma.attendance.findMany({
+      where: { studentId: { in: studentUserIds } },
+      select: { studentId: true, status: true },
+    }),
+    prisma.grade.findMany({
+      where: { studentId: { in: studentProfileIds } },
+      select: { studentId: true, marks: true, submission: { select: { activity: { select: { totalMarks: true } } } } },
+    }),
+    prisma.submission.groupBy({
+      by: ['studentId'],
+      where: { studentId: { in: studentProfileIds } },
+      _count: { _all: true },
+    }),
+    prisma.activity.groupBy({
+      by: ['subjectId'],
+      where: { subject: { classId: { in: classIds } }, isDraft: false, isActive: true },
+      _count: { _all: true },
+    }),
+  ]);
+
+  // Total published activities per class (sum across that class's subjects).
+  const subjectToClass = await prisma.subject.findMany({
+    where: { classId: { in: classIds } },
+    select: { id: true, classId: true },
+  });
+  const classIdBySubjectId = new Map(subjectToClass.map((s) => [s.id, s.classId]));
+  const activityCountByClass = new Map<string, number>();
+  for (const a of activitiesByClass) {
+    const classId = classIdBySubjectId.get(a.subjectId);
+    if (!classId) continue;
+    activityCountByClass.set(classId, (activityCountByClass.get(classId) ?? 0) + a._count._all);
+  }
+
+  const attendanceByStudent = new Map<string, { present: number; total: number }>();
+  for (const a of attendanceRecords) {
+    const entry = attendanceByStudent.get(a.studentId) ?? { present: 0, total: 0 };
+    entry.total += 1;
+    if (a.status === 'present') entry.present += 1;
+    attendanceByStudent.set(a.studentId, entry);
+  }
+
+  const gradesByStudent = new Map<string, { sumPct: number; count: number }>();
+  for (const g of grades) {
+    const pct = g.submission.activity.totalMarks > 0 ? (g.marks / g.submission.activity.totalMarks) * 100 : 0;
+    const entry = gradesByStudent.get(g.studentId) ?? { sumPct: 0, count: 0 };
+    entry.sumPct += pct;
+    entry.count += 1;
+    gradesByStudent.set(g.studentId, entry);
+  }
+
+  const submissionCountByStudent = new Map(submissionCounts.map((s) => [s.studentId, s._count._all]));
+
+  const results = students.map((s) => {
+    const att = attendanceByStudent.get(s.userId);
+    const attendanceRate = att && att.total > 0 ? (att.present / att.total) * 100 : 100;
+
+    const gr = gradesByStudent.get(s.id);
+    const avgGrade = gr && gr.count > 0 ? gr.sumPct / gr.count : 100;
+
+    const totalActivities = activityCountByClass.get(s.class.id) ?? 0;
+    const submittedCount = submissionCountByStudent.get(s.id) ?? 0;
+    const submissionRate = totalActivities > 0 ? Math.min(100, (submittedCount / totalActivities) * 100) : 100;
+
+    const attendanceScore = (attendanceRate / 100) * 40;
+    const gradeScore = (avgGrade / 100) * 40;
+    const submissionScore = (submissionRate / 100) * 20;
+    const riskScore = Math.round(100 - (attendanceScore + gradeScore + submissionScore));
+
+    // Whichever factor lost the most points, proportionally, drives the label.
+    const attendanceLoss = 40 - attendanceScore;
+    const gradeLoss = 40 - gradeScore;
+    const submissionLoss = 20 - submissionScore;
+    let primaryReason: string;
+    if (attendanceLoss >= gradeLoss && attendanceLoss >= submissionLoss) primaryReason = 'Low attendance';
+    else if (gradeLoss >= submissionLoss) primaryReason = 'Poor grades';
+    else primaryReason = 'Not submitting';
+
+    return {
+      studentId: s.id,
+      studentName: s.user.name,
+      className: s.class.number,
+      section: s.class.section,
+      attendanceRate: Math.round(attendanceRate),
+      avgGrade: Math.round(avgGrade),
+      submissionRate: Math.round(submissionRate),
+      riskScore,
+      riskLevel: riskLevelFor(riskScore),
+      primaryReason,
+    };
+  });
+
+  const atRisk = results.filter((r) => r.riskScore >= 40).sort((a, b) => b.riskScore - a.riskScore);
+
+  send(res, 200, atRisk);
+}
+
+// =================================================================
+// Global Search
+// GET /api/admin/search?q=&type=all|student|teacher|class|subject
+// =================================================================
+
+export async function globalSearch(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const q = String(req.query.q ?? '').trim();
+  const type = String(req.query.type ?? 'all');
+  const empty = { students: [], teachers: [], classes: [], subjects: [] };
+
+  if (q.length < 2) {
+    send(res, 200, empty);
+    return;
+  }
+
+  const wantStudents = type === 'all' || type === 'student';
+  const wantTeachers = type === 'all' || type === 'teacher';
+  const wantClasses = type === 'all' || type === 'class';
+  const wantSubjects = type === 'all' || type === 'subject';
+
+  const numericQuery = Number(q);
+
+  const [students, teachers, classes, subjects] = await Promise.all([
+    wantStudents
+      ? prisma.user.findMany({
+          where: { schoolId, role: 'student', isActive: true, name: { contains: q, mode: 'insensitive' } },
+          take: 5,
+          select: {
+            id: true,
+            name: true,
+            studentProfile: { select: { rollNo: true, class: { select: { number: true, section: true } } } },
+          },
+        })
+      : [],
+    wantTeachers
+      ? prisma.user.findMany({
+          where: { schoolId, role: 'teacher', isActive: true, name: { contains: q, mode: 'insensitive' } },
+          take: 5,
+          select: { id: true, name: true, teachingSubjects: { select: { name: true } } },
+        })
+      : [],
+    wantClasses
+      ? prisma.class.findMany({
+          where: {
+            schoolId,
+            isActive: true,
+            ...(Number.isNaN(numericQuery)
+              ? { section: { contains: q, mode: 'insensitive' } }
+              : { number: numericQuery }),
+          },
+          take: 5,
+          include: {
+            classTeacher: { select: { name: true } },
+            _count: { select: { studentProfiles: true } },
+          },
+        })
+      : [],
+    wantSubjects
+      ? prisma.subject.findMany({
+          where: { class: { schoolId }, isActive: true, name: { contains: q, mode: 'insensitive' } },
+          take: 5,
+          include: {
+            class: { select: { number: true, section: true } },
+            teacher: { select: { name: true } },
+          },
+        })
+      : [],
+  ]);
+
+  send(res, 200, {
+    students: students.map((s) => ({
+      id: s.id,
+      name: s.name,
+      rollNo: s.studentProfile?.rollNo ?? null,
+      classLabel: s.studentProfile ? `${s.studentProfile.class.number}-${s.studentProfile.class.section}` : null,
+    })),
+    teachers: teachers.map((t) => ({
+      id: t.id,
+      name: t.name,
+      subjects: t.teachingSubjects.map((sub) => sub.name),
+    })),
+    classes: classes.map((c) => ({
+      id: c.id,
+      label: `Class ${c.number}-${c.section}`,
+      studentCount: c._count.studentProfiles,
+      classTeacherName: c.classTeacher?.name ?? null,
+    })),
+    subjects: subjects.map((sub) => ({
+      id: sub.id,
+      name: sub.name,
+      classLabel: `${sub.class.number}-${sub.class.section}`,
+      teacherName: sub.teacher.name,
+    })),
+  });
+}

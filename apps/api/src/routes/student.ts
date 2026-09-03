@@ -4,6 +4,7 @@ import { requireRole } from '../middleware/rbac';
 import {
   createLeaveRequest,
   getActivities,
+  getAiInsights,
   getAttendance,
   getBadges,
   getDashboard,
@@ -42,5 +43,7 @@ router.get('/fees', getMyFees);
 
 router.post('/leave-request', createLeaveRequest);
 router.get('/leave-requests', getMyLeaveRequests);
+
+router.get('/ai-insights', getAiInsights);
 
 export default router;

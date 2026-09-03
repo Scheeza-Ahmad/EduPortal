@@ -78,3 +78,9 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Urdu mode: applied to the portal's <main> content when the language
+   toggle is set to Urdu — right-to-left flow + the Nastaliq webfont. */
+[dir='rtl'] {
+  font-family: var(--font-urdu), serif;
+}

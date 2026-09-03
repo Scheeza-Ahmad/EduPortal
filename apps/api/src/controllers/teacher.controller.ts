@@ -1159,3 +1159,90 @@ export async function reviewTeacherLeaveRequest(req: AuthRequest, res: Response)
 
   send(res, 200, updated);
 }
+
+// =================================================================
+// AI Grade Suggestion
+// GET /api/teacher/activities/:id/grade-suggestion
+// =================================================================
+
+function mean(nums: number[]): number {
+  return nums.reduce((a, b) => a + b, 0) / nums.length;
+}
+
+function stdDev(nums: number[], avg: number): number {
+  const variance = nums.reduce((sum, n) => sum + (n - avg) ** 2, 0) / nums.length;
+  return Math.sqrt(variance);
+}
+
+function median(nums: number[]): number {
+  const sorted = [...nums].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+export async function getGradeSuggestion(req: AuthRequest, res: Response): Promise<void> {
+  const teacherId = req.user!.userId;
+  const { id } = req.params;
+
+  const activity = await prisma.activity.findFirst({
+    where: { id, createdById: teacherId },
+    include: {
+      submissions: { include: { grade: true } },
+    },
+  });
+  if (!activity) {
+    send(res, 404, undefined, 'Activity not found');
+    return;
+  }
+
+  const totalSubmissions = activity.submissions.length;
+  const gradedSubmissions = activity.submissions.filter((s) => s.grade);
+  const gradedCount = gradedSubmissions.length;
+  const ungradedCount = totalSubmissions - gradedCount;
+
+  if (gradedCount < 3) {
+    send(res, 200, {
+      activityId: id,
+      totalSubmissions,
+      gradedCount,
+      ungradedCount,
+      suggestion: null,
+      reason: 'Need at least 3 graded submissions for AI suggestion',
+    });
+    return;
+  }
+
+  const marks = gradedSubmissions.map((s) => s.grade!.marks);
+  const avg = mean(marks);
+  const sd = stdDev(marks, avg);
+  const med = median(marks);
+
+  const distribution = { excellent: 0, good: 0, average: 0, needsWork: 0 };
+  for (const m of marks) {
+    if (m > avg + sd) distribution.excellent += 1;
+    else if (m >= avg) distribution.good += 1;
+    else if (m >= avg - sd) distribution.average += 1;
+    else distribution.needsWork += 1;
+  }
+
+  send(res, 200, {
+    activityId: id,
+    totalSubmissions,
+    gradedCount,
+    ungradedCount,
+    stats: {
+      mean: Math.round(avg * 10) / 10,
+      stdDev: Math.round(sd * 10) / 10,
+      min: Math.min(...marks),
+      max: Math.max(...marks),
+      median: med,
+    },
+    suggestion: {
+      excellent: `Above ${Math.round((avg + sd) * 10) / 10} marks`,
+      good: `${Math.round(avg * 10) / 10} to ${Math.round((avg + sd) * 10) / 10} marks`,
+      average: `${Math.round((avg - sd) * 10) / 10} to ${Math.round(avg * 10) / 10} marks`,
+      needsWork: `Below ${Math.round((avg - sd) * 10) / 10} marks`,
+    },
+    distribution,
+  });
+}

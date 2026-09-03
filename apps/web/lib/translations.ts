@@ -1,0 +1,58 @@
+export type Language = 'en' | 'ur';
+
+type TranslationKey = keyof typeof translations;
+
+export const translations = {
+  dashboard: { en: 'Dashboard', ur: 'ڈیش بورڈ' },
+  students: { en: 'Students', ur: 'طلباء' },
+  teachers: { en: 'Teachers', ur: 'اساتذہ' },
+  coordinators: { en: 'Coordinators', ur: 'کوآرڈینیٹرز' },
+  classes: { en: 'Classes', ur: 'کلاسز' },
+  subjects: { en: 'Subjects', ur: 'مضامین' },
+  timetable: { en: 'Timetable', ur: 'ٹائم ٹیبل' },
+  attendance: { en: 'Attendance', ur: 'حاضری' },
+  grades: { en: 'Grades', ur: 'نمبرات' },
+  fees: { en: 'Fees', ur: 'فیس' },
+  reportCards: { en: 'Report Cards', ur: 'رپورٹ کارڈ' },
+  reports: { en: 'Reports', ur: 'رپورٹس' },
+  announcements: { en: 'Announcements', ur: 'اعلانات' },
+  calendar: { en: 'Calendar', ur: 'کیلنڈر' },
+  leaveRequests: { en: 'Leave Requests', ur: 'رخصت کی درخواستیں' },
+  consentForms: { en: 'Consent Forms', ur: 'رضامندی فارم' },
+  financeOfficer: { en: 'Finance Officer', ur: 'فنانس آفیسر' },
+  atRiskStudents: { en: 'At-Risk Students', ur: 'خطرے میں طلباء' },
+  logout: { en: 'Logout', ur: 'لاگ آوٹ' },
+  save: { en: 'Save', ur: 'محفوظ کریں' },
+  cancel: { en: 'Cancel', ur: 'منسوخ' },
+  search: { en: 'Search', ur: 'تلاش' },
+  welcome: { en: 'Welcome', ur: 'خوش آمدید' },
+  activities: { en: 'Activities', ur: 'سرگرمیاں' },
+  submissions: { en: 'Submissions', ur: 'جمع شدہ کام' },
+  badges: { en: 'Badges', ur: 'بیجز' },
+  achievements: { en: 'Achievements', ur: 'کامیابیاں' },
+  notifications: { en: 'Notifications', ur: 'اطلاعات' },
+  messages: { en: 'Messages', ur: 'پیغامات' },
+  monthlyReport: { en: 'Monthly Report', ur: 'ماہانہ رپورٹ' },
+  wingReport: { en: 'Wing Report', ur: 'ونگ رپورٹ' },
+  parents: { en: 'Parents', ur: 'والدین' },
+  schools: { en: 'Schools', ur: 'اسکولز' },
+  auditLog: { en: 'Audit Log', ur: 'آڈٹ لاگ' },
+  backup: { en: 'Backup', ur: 'بیک اپ' },
+  setup: { en: 'Setup', ur: 'ترتیب' },
+  feeStructure: { en: 'Fee Structure', ur: 'فیس ڈھانچہ' },
+  studentFees: { en: 'Student Fees', ur: 'طلباء کی فیس' },
+  insights: { en: 'AI Insights', ur: 'اے آئی بصیرت' },
+  loading: { en: 'Loading...', ur: 'لوڈ ہو رہا ہے...' },
+  edit: { en: 'Edit', ur: 'ترمیم' },
+  delete: { en: 'Delete', ur: 'حذف کریں' },
+  approve: { en: 'Approve', ur: 'منظور کریں' },
+  reject: { en: 'Reject', ur: 'مسترد کریں' },
+  myClasses: { en: 'My Classes', ur: 'میری کلاسیں' },
+  classFees: { en: 'Class Fees', ur: 'کلاس فیس' },
+  reportCard: { en: 'Report Card', ur: 'رپورٹ کارڈ' },
+  leave: { en: 'Leave', ur: 'رخصت' },
+} as const satisfies Record<string, { en: string; ur: string }>;
+
+export function t(key: TranslationKey, lang: Language): string {
+  return translations[key][lang];
+}

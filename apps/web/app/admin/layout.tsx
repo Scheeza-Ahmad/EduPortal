@@ -7,31 +7,39 @@ import { Loader2, Menu, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
+import { useLanguage } from '@/lib/LanguageContext';
+import { t } from '@/lib/translations';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { PortalToggles } from '@/components/portal-toggles';
+import { AdminSearchBar } from '@/components/admin-search-bar';
 
 const NAV_ITEMS = [
-  { href: '/admin', label: 'Dashboard' },
-  { href: '/admin/students', label: 'Students' },
-  { href: '/admin/teachers', label: 'Teachers' },
-  { href: '/admin/coordinators', label: 'Coordinators' },
-  { href: '/admin/classes', label: 'Classes' },
-  { href: '/admin/subjects', label: 'Subjects' },
-  { href: '/admin/timetable', label: 'Timetable' },
-  { href: '/admin/announcements', label: 'Announcements' },
-  { href: '/admin/report-cards', label: 'Report Cards' },
-  { href: '/admin/calendar', label: 'Calendar' },
-  { href: '/admin/leave-requests', label: 'Leave Requests' },
-  { href: '/admin/consent-forms', label: 'Consent Forms' },
-  { href: '/admin/finance-officer', label: 'Finance Officer' },
+  { href: '/admin', key: 'dashboard' as const },
+  { href: '/admin/students', key: 'students' as const },
+  { href: '/admin/teachers', key: 'teachers' as const },
+  { href: '/admin/coordinators', key: 'coordinators' as const },
+  { href: '/admin/classes', key: 'classes' as const },
+  { href: '/admin/subjects', key: 'subjects' as const },
+  { href: '/admin/timetable', key: 'timetable' as const },
+  { href: '/admin/announcements', key: 'announcements' as const },
+  { href: '/admin/report-cards', key: 'reportCards' as const },
+  { href: '/admin/calendar', key: 'calendar' as const },
+  { href: '/admin/leave-requests', key: 'leaveRequests' as const },
+  { href: '/admin/consent-forms', key: 'consentForms' as const },
+  { href: '/admin/at-risk', key: 'atRiskStudents' as const, icon: '⚠️' },
+  { href: '/admin/finance-officer', key: 'financeOfficer' as const },
 ];
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { accessToken, user, setAuth, clearAuth } = useAuthStore();
+  const { language } = useLanguage();
   const [checkingSession, setCheckingSession] = useState(true);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [highRiskCount, setHighRiskCount] = useState(0);
 
   // Clear the pending indicator once the route has actually changed.
   useEffect(() => {
@@ -71,6 +79,14 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
+
+  useEffect(() => {
+    if (checkingSession) return;
+    api
+      .get<{ success: boolean; data: { riskLevel: string }[] }>('/api/admin/at-risk-students')
+      .then((res) => setHighRiskCount(res.data.data.filter((s) => s.riskLevel === 'high').length))
+      .catch(() => {});
+  }, [checkingSession]);
 
   async function handleLogout() {
     try {
@@ -136,8 +152,17 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
                     : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 )}
               >
-                <span>{item.label}</span>
-                {isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                <span>
+                  {item.icon ? `${item.icon} ` : ''}
+                  {t(item.key, language)}
+                </span>
+                {isPending ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : item.key === 'atRiskStudents' && highRiskCount > 0 ? (
+                  <Badge variant="destructive" className="h-5 px-1.5 text-[10px]">
+                    {highRiskCount}
+                  </Badge>
+                ) : null}
               </Link>
             );
           })}
@@ -145,19 +170,27 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
       </aside>
 
       <div className="flex min-h-screen flex-1 flex-col">
-        <header className="flex items-center justify-between border-b px-4 py-3 sm:px-6">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 sm:px-6">
           <div className="flex items-center gap-3">
             <button className="lg:hidden" onClick={() => setMobileNavOpen(true)} aria-label="Open menu">
               <Menu className="h-5 w-5" />
             </button>
             <span className="text-sm font-medium">{user?.name ?? 'School Admin'}</span>
           </div>
-          <Button variant="outline" size="sm" onClick={handleLogout}>
-            Logout
-          </Button>
+
+          <AdminSearchBar />
+
+          <div className="flex items-center gap-2">
+            <PortalToggles />
+            <Button variant="outline" size="sm" onClick={handleLogout}>
+              {t('logout', language)}
+            </Button>
+          </div>
         </header>
 
-        <main className="flex-1 p-4 sm:p-6">{children}</main>
+        <main className="flex-1 p-4 sm:p-6" dir={language === 'ur' ? 'rtl' : 'ltr'}>
+          {children}
+        </main>
       </div>
     </div>
   );

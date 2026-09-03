@@ -13,6 +13,7 @@ import {
   getClassFees,
   getDashboard,
   getFeeDefaulters,
+  getGradeSuggestion,
   getMonthlyReport,
   getMyClassAnnouncements,
   getMyClasses,
@@ -51,6 +52,7 @@ router.patch('/monthly-report/:id/submit', submitMonthlyReport);
 router.get('/activities/reuse', getReusableActivities);
 router.get('/activities', getActivities);
 router.get('/activities/:id', getActivity);
+router.get('/activities/:id/grade-suggestion', getGradeSuggestion);
 router.post('/activities', createActivity);
 router.patch('/activities/:id', updateActivity);
 router.delete('/activities/:id', deleteActivity);

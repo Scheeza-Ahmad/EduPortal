@@ -56,6 +56,17 @@ interface GradeForm {
   feedback: string;
 }
 
+interface GradeSuggestion {
+  activityId: string;
+  totalSubmissions: number;
+  gradedCount: number;
+  ungradedCount: number;
+  stats: { mean: number; stdDev: number; min: number; max: number; median: number } | null;
+  suggestion: { excellent: string; good: string; average: string; needsWork: string } | null;
+  distribution: { excellent: number; good: number; average: number; needsWork: number } | null;
+  reason?: string;
+}
+
 export default function ActivitySubmissionsPage() {
   const params = useParams<{ id: string }>();
   const activityId = params.id;
@@ -70,6 +81,10 @@ export default function ActivitySubmissionsPage() {
   const [form, setForm] = useState<GradeForm>({ marks: '', feedback: '' });
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  const [aiDialogOpen, setAiDialogOpen] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiInsight, setAiInsight] = useState<GradeSuggestion | null>(null);
 
   async function loadData() {
     setLoading(true);
@@ -96,6 +111,21 @@ export default function ActivitySubmissionsPage() {
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activityId]);
+
+  async function openAiInsight() {
+    setAiDialogOpen(true);
+    setAiLoading(true);
+    try {
+      const res = await api.get<{ success: boolean; data: GradeSuggestion }>(
+        `/api/teacher/activities/${activityId}/grade-suggestion`
+      );
+      setAiInsight(res.data.data);
+    } catch {
+      setAiInsight(null);
+    } finally {
+      setAiLoading(false);
+    }
+  }
 
   function openGradeDialog(submission: Submission) {
     setGradingSubmission(submission);
@@ -149,6 +179,9 @@ export default function ActivitySubmissionsPage() {
             </p>
           )}
         </div>
+        <Button variant="outline" onClick={openAiInsight}>
+          🤖 AI Grade Insight
+        </Button>
       </div>
 
       <Card>
@@ -289,6 +322,94 @@ export default function ActivitySubmissionsPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={aiDialogOpen} onOpenChange={setAiDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>🤖 AI Grade Insight — {activity?.title ?? 'Activity'}</DialogTitle>
+          </DialogHeader>
+          {aiLoading ? (
+            <p className="text-sm text-muted-foreground">Analyzing grades...</p>
+          ) : !aiInsight || !aiInsight.stats || !aiInsight.distribution || !aiInsight.suggestion ? (
+            <p className="text-sm text-muted-foreground">
+              {aiInsight?.reason ?? 'Not enough graded submissions yet.'}
+            </p>
+          ) : (
+            <div className="space-y-5 text-sm">
+              <div>
+                <div className="mb-2 font-semibold">Class Statistics</div>
+                <div className="grid grid-cols-2 gap-2 rounded-md border p-3">
+                  <div>
+                    Average Score: <span className="font-medium">{aiInsight.stats.mean} / {activity?.totalMarks}</span>{' '}
+                    <span className="text-muted-foreground">
+                      ({activity ? Math.round((aiInsight.stats.mean / activity.totalMarks) * 100) : 0}%)
+                    </span>
+                  </div>
+                  <div>
+                    Highest Score: <span className="font-medium">{aiInsight.stats.max} / {activity?.totalMarks}</span>
+                  </div>
+                  <div>
+                    Lowest Score: <span className="font-medium">{aiInsight.stats.min} / {activity?.totalMarks}</span>
+                  </div>
+                  <div>
+                    Std Deviation: <span className="font-medium">{aiInsight.stats.stdDev}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-2 font-semibold">Grade Distribution</div>
+                <div className="space-y-1 rounded-md border p-3">
+                  <div>🟢 Excellent ({aiInsight.suggestion.excellent}): {aiInsight.distribution.excellent} students</div>
+                  <div>🔵 Good ({aiInsight.suggestion.good}): {aiInsight.distribution.good} students</div>
+                  <div>🟡 Average ({aiInsight.suggestion.average}): {aiInsight.distribution.average} students</div>
+                  <div>🔴 Needs Work ({aiInsight.suggestion.needsWork}): {aiInsight.distribution.needsWork} students</div>
+                </div>
+              </div>
+
+              {activity && (
+                <div>
+                  <div className="mb-2 font-semibold">Grading Suggestion</div>
+                  <div className="space-y-1 rounded-md border p-3">
+                    {(
+                      [
+                        [0.9, 1, 'A+'],
+                        [0.8, 0.9, 'A'],
+                        [0.7, 0.8, 'B+'],
+                        [0.6, 0.7, 'B'],
+                        [0.5, 0.6, 'C'],
+                        [0, 0.5, 'F'],
+                      ] as [number, number, string][]
+                    ).map(([lo, hi, gradeLabel]) => {
+                      const total = activity.totalMarks;
+                      const loMark = Math.ceil(lo * total);
+                      const hiMark = Math.max(loMark, Math.floor(hi * total) - (hi < 1 ? 1 : 0));
+                      return (
+                        <div key={gradeLabel} className="flex justify-between">
+                          <span className="font-medium">{gradeLabel}</span>
+                          <span className="text-muted-foreground">
+                            {gradeLabel === 'F' ? `Below ${Math.ceil(0.5 * total)}` : `${loMark}-${hiMark} marks`}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <p className="text-xs text-muted-foreground">
+                Note: Based on {aiInsight.gradedCount} graded submission{aiInsight.gradedCount === 1 ? '' : 's'}
+                {aiInsight.ungradedCount > 0 ? ` (${aiInsight.ungradedCount} still ungraded)` : ''}.
+              </p>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAiDialogOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
