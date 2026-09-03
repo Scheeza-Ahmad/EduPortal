@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useTranslation } from '@/lib/useTranslation';
 import {
   Bar,
   BarChart,
@@ -57,13 +58,17 @@ function getErrorMessage(err: unknown, fallback: string): string {
 }
 
 export default function AdminDashboardPage() {
+  const { t } = useTranslation();
   const [stats, setStats] = useState<Stats | null>(null);
   const [trend, setTrend] = useState<TrendData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setError(null);
 
     api
       .get<{ success: boolean; data: Stats }>('/api/admin/stats')
@@ -87,7 +92,7 @@ export default function AdminDashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [retryKey]);
 
   if (loading) {
     return (
@@ -107,16 +112,23 @@ export default function AdminDashboardPage() {
   }
 
   if (error) {
-    return <p className="text-sm text-destructive">{error}</p>;
+    return (
+      <div className="space-y-3">
+        <p className="text-sm text-destructive">Failed to load. {error}</p>
+        <Button variant="outline" size="sm" onClick={() => setRetryKey((k) => k + 1)}>
+          Try Again
+        </Button>
+      </div>
+    );
   }
 
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {STAT_CARDS.map(({ key, label, suffix }) => (
+        {STAT_CARDS.map(({ key, suffix }) => (
           <Card key={key}>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">{t(key)}</CardTitle>
             </CardHeader>
             <CardContent>
               <p className="text-3xl font-bold">

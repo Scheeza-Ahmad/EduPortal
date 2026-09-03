@@ -6,7 +6,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 export const api = axios.create({
   baseURL: API_BASE_URL,
   withCredentials: true, // send the httpOnly refresh-token cookie
-  timeout: 10000, // don't let a slow/hung backend request block the UI forever
+  timeout: 30000, // generous enough to ride out a Supabase/Railway cold start
 });
 
 api.interceptors.request.use((config) => {
@@ -19,6 +19,11 @@ api.interceptors.request.use((config) => {
 
 interface RetriableConfig extends InternalAxiosRequestConfig {
   _retry?: boolean;
+  _networkRetry?: boolean;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 let refreshPromise: Promise<string | null> | null = null;
@@ -41,6 +46,17 @@ api.interceptors.response.use(
   (response) => response,
   async (error: AxiosError) => {
     const originalRequest = error.config as RetriableConfig | undefined;
+
+    // Transient failures (cold-start timeouts, connection resets, 5xx) — retry
+    // once after a short delay before giving up, so a slow Supabase/Railway
+    // wake-up doesn't surface as a hard error on the first request.
+    const isNetworkOrServerError =
+      error.code === 'ECONNABORTED' || error.message === 'Network Error' || (error.response?.status ?? 0) >= 500;
+    if (isNetworkOrServerError && originalRequest && !originalRequest._networkRetry) {
+      originalRequest._networkRetry = true;
+      await delay(1000);
+      return api(originalRequest);
+    }
 
     if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
       originalRequest._retry = true;

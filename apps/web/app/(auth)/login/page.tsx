@@ -3,12 +3,13 @@
 import { FormEvent, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AxiosError } from 'axios';
-import { ShieldCheck, Lock, Users, Zap } from 'lucide-react';
+import { ArrowLeft, Lock } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { cn } from '@/lib/utils';
 
 interface LoginResponse {
   accessToken: string;
@@ -25,13 +26,86 @@ const ROLE_HOME: Record<string, string> = {
   coordinator: '/coordinator',
 };
 
-const FEATURES = [
-  { icon: ShieldCheck, label: 'Secure', text: 'JWT auth, encrypted passwords, audit-logged actions' },
-  { icon: Users, label: 'Role-based', text: 'Tailored access for admins, teachers, students & parents' },
-  { icon: Zap, label: 'Automated', text: 'Attendance alerts, reminders, and reports on autopilot' },
+type RoleValue = keyof typeof ROLE_HOME;
+type ColorName = 'purple' | 'blue' | 'green' | 'indigo' | 'orange' | 'yellow' | 'pink';
+
+interface RoleInfo {
+  value: RoleValue;
+  label: string;
+  icon: string;
+  description: string;
+  loginTitle: string;
+  color: ColorName;
+}
+
+const ROLES: RoleInfo[] = [
+  { value: 'super_admin', label: 'Super Admin', icon: '🛡️', description: 'Platform management', loginTitle: 'Super Admin Login', color: 'purple' },
+  { value: 'school_admin', label: 'School Admin', icon: '🏫', description: 'School operations', loginTitle: 'School Admin Login', color: 'blue' },
+  { value: 'teacher', label: 'Teacher', icon: '👨‍🏫', description: 'Classes & activities', loginTitle: 'Teacher Login', color: 'green' },
+  { value: 'student', label: 'Student', icon: '🎓', description: 'My learning', loginTitle: 'Student Login', color: 'indigo' },
+  { value: 'parent', label: 'Parent', icon: '👨‍👩‍👧‍👦', description: "Child's progress", loginTitle: 'Parent Login', color: 'orange' },
+  { value: 'finance', label: 'Finance', icon: '💰', description: 'Fees & payments', loginTitle: 'Finance Officer Login', color: 'yellow' },
+  { value: 'coordinator', label: 'Coordinator', icon: '🎯', description: 'Wing supervision', loginTitle: 'Coordinator Login', color: 'pink' },
 ];
 
-type Step = 'login' | 'forgot-request' | 'forgot-reset';
+// Literal Tailwind class strings (not built dynamically) so the JIT scanner
+// picks them all up — a template-string `border-${color}-400` would not.
+const COLOR_STYLES: Record<
+  ColorName,
+  { border: string; iconBg: string; text: string; button: string; ring: string }
+> = {
+  purple: {
+    border: 'border-purple-200 hover:border-purple-400 dark:border-purple-900',
+    iconBg: 'bg-purple-100 dark:bg-purple-950',
+    text: 'text-purple-600 dark:text-purple-400',
+    button: 'bg-purple-600 hover:bg-purple-700',
+    ring: 'focus-visible:ring-purple-500',
+  },
+  blue: {
+    border: 'border-blue-200 hover:border-blue-400 dark:border-blue-900',
+    iconBg: 'bg-blue-100 dark:bg-blue-950',
+    text: 'text-blue-600 dark:text-blue-400',
+    button: 'bg-blue-600 hover:bg-blue-700',
+    ring: 'focus-visible:ring-blue-500',
+  },
+  green: {
+    border: 'border-green-200 hover:border-green-400 dark:border-green-900',
+    iconBg: 'bg-green-100 dark:bg-green-950',
+    text: 'text-green-600 dark:text-green-400',
+    button: 'bg-green-600 hover:bg-green-700',
+    ring: 'focus-visible:ring-green-500',
+  },
+  indigo: {
+    border: 'border-indigo-200 hover:border-indigo-400 dark:border-indigo-900',
+    iconBg: 'bg-indigo-100 dark:bg-indigo-950',
+    text: 'text-indigo-600 dark:text-indigo-400',
+    button: 'bg-indigo-600 hover:bg-indigo-700',
+    ring: 'focus-visible:ring-indigo-500',
+  },
+  orange: {
+    border: 'border-orange-200 hover:border-orange-400 dark:border-orange-900',
+    iconBg: 'bg-orange-100 dark:bg-orange-950',
+    text: 'text-orange-600 dark:text-orange-400',
+    button: 'bg-orange-600 hover:bg-orange-700',
+    ring: 'focus-visible:ring-orange-500',
+  },
+  yellow: {
+    border: 'border-yellow-200 hover:border-yellow-400 dark:border-yellow-900',
+    iconBg: 'bg-yellow-100 dark:bg-yellow-950',
+    text: 'text-yellow-700 dark:text-yellow-400',
+    button: 'bg-yellow-500 hover:bg-yellow-600',
+    ring: 'focus-visible:ring-yellow-500',
+  },
+  pink: {
+    border: 'border-pink-200 hover:border-pink-400 dark:border-pink-900',
+    iconBg: 'bg-pink-100 dark:bg-pink-950',
+    text: 'text-pink-600 dark:text-pink-400',
+    button: 'bg-pink-600 hover:bg-pink-700',
+    ring: 'focus-visible:ring-pink-500',
+  },
+};
+
+type Step = 'role-select' | 'login' | 'forgot-request' | 'forgot-reset';
 
 function getErrorMessage(err: unknown, fallback: string): string {
   const axiosErr = err as AxiosError<{ error?: string }>;
@@ -42,7 +116,8 @@ export default function LoginPage() {
   const router = useRouter();
   const setAuth = useAuthStore((state) => state.setAuth);
 
-  const [step, setStep] = useState<Step>('login');
+  const [step, setStep] = useState<Step>('role-select');
+  const [selectedRole, setSelectedRole] = useState<RoleInfo>(ROLES[1]);
   const [loginNotice, setLoginNotice] = useState<string | null>(null);
 
   // --- Login form state ---
@@ -64,6 +139,16 @@ export default function LoginPage() {
   const [resetLoading, setResetLoading] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
 
+  const colors = COLOR_STYLES[selectedRole.color];
+
+  function chooseRole(role: RoleInfo) {
+    setSelectedRole(role);
+    setLoginError(null);
+    setEmail('');
+    setPassword('');
+    setStep('login');
+  }
+
   async function handleLogin(e: FormEvent) {
     e.preventDefault();
     setLoginError(null);
@@ -76,6 +161,8 @@ export default function LoginPage() {
       );
       const { accessToken, user } = res.data.data;
       setAuth(accessToken, user);
+      // The role picked in Step 1 is purely for theming — the backend's
+      // actual role from the credentials decides where the user lands.
       router.push(ROLE_HOME[user.role] ?? '/login');
     } catch (err) {
       setLoginError(getErrorMessage(err, 'Something went wrong. Please try again.'));
@@ -117,7 +204,6 @@ export default function LoginPage() {
         newPassword,
       });
 
-      // Reset all forgot-password state and go back to login with a success notice.
       setStep('login');
       setLoginNotice('Password reset successful. Please sign in with your new password.');
       setEmail(forgotEmail);
@@ -139,226 +225,240 @@ export default function LoginPage() {
     setForgotNotice(null);
   }
 
-  return (
-    <div className="flex min-h-screen">
-      {/* Left branding panel — 60% */}
-      <div className="hidden w-3/5 flex-col justify-between bg-slate-900 p-12 text-slate-50 lg:flex">
-        <div className="flex items-center gap-2">
-          <ShieldCheck className="h-7 w-7 text-slate-100" strokeWidth={2} />
-          <span className="text-xl font-semibold tracking-tight">EduPortal</span>
-        </div>
+  // ---------------------------------------------------------------
+  // STEP 1 — Role selection
+  // ---------------------------------------------------------------
+  if (step === 'role-select') {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center bg-background px-6 py-12">
+        <div className="w-full max-w-3xl text-center">
+          <h1 className="text-3xl font-semibold tracking-tight">Welcome to EduPortal</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Select your role to continue</p>
 
-        <div className="max-w-md">
-          <h1 className="text-3xl font-semibold leading-tight tracking-tight">
-            Empowering Education, Simplifying Management
-          </h1>
-
-          <div className="mt-10 space-y-6">
-            {FEATURES.map(({ icon: Icon, label, text }) => (
-              <div key={label} className="flex items-start gap-3">
-                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-800">
-                  <Icon className="h-4 w-4 text-slate-200" strokeWidth={2} />
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-slate-100">{label}</p>
-                  <p className="text-sm text-slate-400">{text}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <p className="text-xs text-slate-500">
-          &copy; {new Date().getFullYear()} EduPortal. All rights reserved.
-        </p>
-      </div>
-
-      {/* Right form panel — 40% */}
-      <div className="flex w-full flex-col items-center justify-center bg-background px-6 py-12 lg:w-2/5">
-        <div className="w-full max-w-sm">
-          <div className="mb-8 flex items-center gap-2 lg:hidden">
-            <ShieldCheck className="h-6 w-6 text-slate-900" strokeWidth={2} />
-            <span className="text-lg font-semibold tracking-tight">EduPortal</span>
-          </div>
-
-          {step === 'login' && (
-            <>
-              <h2 className="text-2xl font-semibold tracking-tight">Sign in</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Enter your credentials to access your account.
-              </p>
-
-              {loginNotice && (
-                <p className="mt-4 rounded-md bg-green-50 px-3 py-2 text-sm text-green-700">
-                  {loginNotice}
-                </p>
-              )}
-
-              <form onSubmit={handleLogin} className="mt-6 space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="email">Email</Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    autoComplete="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="password">Password</Label>
-                    <button
-                      type="button"
-                      onClick={() => setStep('forgot-request')}
-                      className="text-xs font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-                    >
-                      Forgot password?
-                    </button>
+          <div className="mt-10 grid grid-cols-2 gap-4 sm:grid-cols-3">
+            {ROLES.map((role) => {
+              const c = COLOR_STYLES[role.color];
+              return (
+                <button
+                  key={role.value}
+                  onClick={() => chooseRole(role)}
+                  className={cn(
+                    'flex flex-col items-center gap-2 rounded-xl border-2 bg-card p-5 text-center transition-all duration-150 hover:-translate-y-0.5 hover:shadow-lg',
+                    c.border
+                  )}
+                >
+                  <div className={cn('flex h-12 w-12 items-center justify-center rounded-full text-2xl', c.iconBg)}>
+                    {role.icon}
                   </div>
-                  <Input
-                    id="password"
-                    type="password"
-                    autoComplete="current-password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                  />
-                </div>
-
-                {loginError && (
-                  <p className="text-sm text-destructive" role="alert">
-                    {loginError}
-                  </p>
-                )}
-
-                <Button type="submit" className="w-full" disabled={loginLoading}>
-                  {loginLoading ? 'Signing in...' : 'Sign in'}
-                </Button>
-              </form>
-            </>
-          )}
-
-          {step === 'forgot-request' && (
-            <>
-              <h2 className="text-2xl font-semibold tracking-tight">Reset your password</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Enter your account email and we&apos;ll send you a reset code.
-              </p>
-
-              <form onSubmit={handleForgotRequest} className="mt-6 space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="forgot-email">Email</Label>
-                  <Input
-                    id="forgot-email"
-                    type="email"
-                    autoComplete="email"
-                    required
-                    value={forgotEmail}
-                    onChange={(e) => setForgotEmail(e.target.value)}
-                  />
-                </div>
-
-                {forgotError && (
-                  <p className="text-sm text-destructive" role="alert">
-                    {forgotError}
-                  </p>
-                )}
-
-                <Button type="submit" className="w-full" disabled={forgotLoading}>
-                  {forgotLoading ? 'Sending...' : 'Send reset code'}
-                </Button>
-
-                <button
-                  type="button"
-                  onClick={backToLogin}
-                  className="w-full text-center text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-                >
-                  Back to sign in
+                  <span className="text-sm font-semibold">{role.label}</span>
+                  <span className="text-xs text-muted-foreground">{role.description}</span>
                 </button>
-              </form>
-            </>
-          )}
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-          {step === 'forgot-reset' && (
-            <>
-              <h2 className="text-2xl font-semibold tracking-tight">Enter reset code</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Enter the 6-digit code and choose a new password.
+  // ---------------------------------------------------------------
+  // STEP 2 — Login / forgot-password forms
+  // ---------------------------------------------------------------
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center bg-background px-6 py-12">
+      <div className="w-full max-w-sm">
+        <button
+          onClick={() => setStep('role-select')}
+          className="mb-6 flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Choose a different role
+        </button>
+
+        <div className="mb-6 flex items-center gap-3">
+          <div className={cn('flex h-11 w-11 items-center justify-center rounded-full text-xl', colors.iconBg)}>
+            {selectedRole.icon}
+          </div>
+          <div>
+            <h2 className={cn('text-xl font-semibold tracking-tight', colors.text)}>
+              {step === 'login' ? selectedRole.loginTitle : selectedRole.label}
+            </h2>
+            {step === 'login' && <p className="text-xs text-muted-foreground">Sign in to continue</p>}
+          </div>
+        </div>
+
+        {step === 'login' && (
+          <>
+            {loginNotice && (
+              <p className="mb-4 rounded-md bg-green-50 px-3 py-2 text-sm text-green-700 dark:bg-green-950 dark:text-green-400">
+                {loginNotice}
               </p>
+            )}
 
-              {forgotNotice && (
-                <p className="mt-4 rounded-md bg-green-50 px-3 py-2 text-sm text-green-700">
-                  {forgotNotice}
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className={colors.ring}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="password">Password</Label>
+                  <button
+                    type="button"
+                    onClick={() => setStep('forgot-request')}
+                    className="text-xs font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+                <Input
+                  id="password"
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className={colors.ring}
+                />
+              </div>
+
+              {loginError && (
+                <p className="text-sm text-destructive" role="alert">
+                  {loginError}
                 </p>
               )}
 
-              <form onSubmit={handleResetPassword} className="mt-6 space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="otp">Reset code</Label>
-                  <Input
-                    id="otp"
-                    inputMode="numeric"
-                    maxLength={6}
-                    required
-                    value={otp}
-                    onChange={(e) => setOtp(e.target.value)}
-                  />
-                </div>
+              <Button type="submit" className={cn('w-full text-white', colors.button)} disabled={loginLoading}>
+                {loginLoading ? 'Signing in...' : 'Sign in'}
+              </Button>
+            </form>
+          </>
+        )}
 
-                <div className="space-y-2">
-                  <Label htmlFor="new-password">New password</Label>
-                  <Input
-                    id="new-password"
-                    type="password"
-                    autoComplete="new-password"
-                    required
-                    minLength={8}
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                  />
-                </div>
+        {step === 'forgot-request' && (
+          <>
+            <p className="mb-4 text-sm text-muted-foreground">
+              Enter your account email and we&apos;ll send you a reset code.
+            </p>
 
-                <div className="space-y-2">
-                  <Label htmlFor="confirm-password">Confirm new password</Label>
-                  <Input
-                    id="confirm-password"
-                    type="password"
-                    autoComplete="new-password"
-                    required
-                    minLength={8}
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                  />
-                </div>
+            <form onSubmit={handleForgotRequest} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="forgot-email">Email</Label>
+                <Input
+                  id="forgot-email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                  value={forgotEmail}
+                  onChange={(e) => setForgotEmail(e.target.value)}
+                />
+              </div>
 
-                {resetError && (
-                  <p className="text-sm text-destructive" role="alert">
-                    {resetError}
-                  </p>
-                )}
+              {forgotError && (
+                <p className="text-sm text-destructive" role="alert">
+                  {forgotError}
+                </p>
+              )}
 
-                <Button type="submit" className="w-full" disabled={resetLoading}>
-                  {resetLoading ? 'Resetting...' : 'Reset password'}
-                </Button>
+              <Button type="submit" className={cn('w-full text-white', colors.button)} disabled={forgotLoading}>
+                {forgotLoading ? 'Sending...' : 'Send reset code'}
+              </Button>
 
-                <button
-                  type="button"
-                  onClick={backToLogin}
-                  className="w-full text-center text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-                >
-                  Back to sign in
-                </button>
-              </form>
-            </>
-          )}
+              <button
+                type="button"
+                onClick={backToLogin}
+                className="w-full text-center text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+              >
+                Back to sign in
+              </button>
+            </form>
+          </>
+        )}
 
-          <div className="mt-6 flex items-center gap-1.5 text-xs text-muted-foreground lg:hidden">
-            <Lock className="h-3.5 w-3.5" />
-            <span>Accounts are created by your school administrator.</span>
-          </div>
+        {step === 'forgot-reset' && (
+          <>
+            <p className="mb-4 text-sm text-muted-foreground">
+              Enter the 6-digit code and choose a new password.
+            </p>
+
+            {forgotNotice && (
+              <p className="mb-4 rounded-md bg-green-50 px-3 py-2 text-sm text-green-700 dark:bg-green-950 dark:text-green-400">
+                {forgotNotice}
+              </p>
+            )}
+
+            <form onSubmit={handleResetPassword} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="otp">Reset code</Label>
+                <Input
+                  id="otp"
+                  inputMode="numeric"
+                  maxLength={6}
+                  required
+                  value={otp}
+                  onChange={(e) => setOtp(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="new-password">New password</Label>
+                <Input
+                  id="new-password"
+                  type="password"
+                  autoComplete="new-password"
+                  required
+                  minLength={8}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="confirm-password">Confirm new password</Label>
+                <Input
+                  id="confirm-password"
+                  type="password"
+                  autoComplete="new-password"
+                  required
+                  minLength={8}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                />
+              </div>
+
+              {resetError && (
+                <p className="text-sm text-destructive" role="alert">
+                  {resetError}
+                </p>
+              )}
+
+              <Button type="submit" className={cn('w-full text-white', colors.button)} disabled={resetLoading}>
+                {resetLoading ? 'Resetting...' : 'Reset password'}
+              </Button>
+
+              <button
+                type="button"
+                onClick={backToLogin}
+                className="w-full text-center text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+              >
+                Back to sign in
+              </button>
+            </form>
+          </>
+        )}
+
+        <div className="mt-6 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+          <Lock className="h-3.5 w-3.5" />
+          <span>Accounts are created by your school administrator.</span>
         </div>
       </div>
     </div>

@@ -55,7 +55,7 @@ export async function getStats(req: AuthRequest, res: Response): Promise<void> {
   const [totalStudents, totalTeachers, totalClasses, totalActivities, presentCount, totalAttendance] =
     await Promise.all([
       prisma.user.count({ where: { schoolId, role: 'student', isActive: true } }),
-      prisma.user.count({ where: { schoolId, role: 'teacher', isActive: true } }),
+      prisma.user.count({ where: { schoolId, role: { in: ['teacher', 'coordinator'] }, isActive: true } }),
       prisma.class.count({ where: { schoolId, isActive: true } }),
       prisma.activity.count({ where: { subject: { class: { schoolId } } } }),
       prisma.attendance.count({
@@ -789,7 +789,7 @@ export async function createSubject(req: AuthRequest, res: Response): Promise<vo
 
   const [targetClass, targetTeacher] = await Promise.all([
     prisma.class.findFirst({ where: { id: classId, schoolId } }),
-    prisma.user.findFirst({ where: { id: teacherId, schoolId, role: 'teacher' } }),
+    prisma.user.findFirst({ where: { id: teacherId, schoolId, role: { in: ['teacher', 'coordinator'] } } }),
   ]);
   if (!targetClass) {
     send(res, 400, undefined, 'Class not found in this school');
@@ -851,7 +851,7 @@ export async function updateSubject(req: AuthRequest, res: Response): Promise<vo
   }
   if (teacherId) {
     const targetTeacher = await prisma.user.findFirst({
-      where: { id: teacherId, schoolId, role: 'teacher' },
+      where: { id: teacherId, schoolId, role: { in: ['teacher', 'coordinator'] } },
     });
     if (!targetTeacher) {
       send(res, 400, undefined, 'Teacher not found in this school');
@@ -1880,6 +1880,121 @@ export async function createFinanceUser(req: AuthRequest, res: Response): Promis
     }
     throw err;
   }
+}
+
+// GET /api/admin/finance/users
+export async function getFinanceUsers(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const officers = await prisma.user.findMany({
+    where: { schoolId, role: 'finance' },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  send(res, 200, { officers: officers.map(stripPassword) });
+}
+
+const updateFinanceUserSchema = z.object({
+  name: z.string().min(1).max(120).optional(),
+  email: z.string().email().optional(),
+  password: z.string().min(8).optional(),
+});
+
+// PATCH /api/admin/finance/users/:id
+export async function updateFinanceUser(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = updateFinanceUserSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid finance officer data');
+    return;
+  }
+
+  const existing = await prisma.user.findFirst({ where: { id: req.params.id, schoolId, role: 'finance' } });
+  if (!existing) {
+    send(res, 404, undefined, 'Finance officer not found');
+    return;
+  }
+
+  const { name, email, password } = parsed.data;
+
+  try {
+    const user = await prisma.user.update({
+      where: { id: existing.id },
+      data: {
+        name,
+        email,
+        password: password ? await bcrypt.hash(password, 12) : undefined,
+      },
+    });
+
+    await auditLog({
+      userId: req.user!.userId,
+      action: 'FINANCE_OFFICER_UPDATED',
+      targetTable: 'User',
+      targetId: user.id,
+      meta: { name, email, passwordChanged: Boolean(password) },
+      ip: req.ip,
+    });
+
+    send(res, 200, stripPassword(user));
+  } catch (err) {
+    if (isUniqueConstraintError(err)) {
+      send(res, 400, undefined, 'Email already in use');
+      return;
+    }
+    throw err;
+  }
+}
+
+// PATCH /api/admin/finance/users/:id/deactivate
+export async function deactivateFinanceUser(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const existing = await prisma.user.findFirst({ where: { id: req.params.id, schoolId, role: 'finance' } });
+  if (!existing) {
+    send(res, 404, undefined, 'Finance officer not found');
+    return;
+  }
+
+  const user = await prisma.user.update({ where: { id: existing.id }, data: { isActive: false } });
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'FINANCE_OFFICER_DEACTIVATED',
+    targetTable: 'User',
+    targetId: user.id,
+    ip: req.ip,
+  });
+
+  send(res, 200, stripPassword(user));
+}
+
+// PATCH /api/admin/finance/users/:id/reactivate
+export async function reactivateFinanceUser(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const existing = await prisma.user.findFirst({ where: { id: req.params.id, schoolId, role: 'finance' } });
+  if (!existing) {
+    send(res, 404, undefined, 'Finance officer not found');
+    return;
+  }
+
+  const user = await prisma.user.update({ where: { id: existing.id }, data: { isActive: true } });
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'FINANCE_OFFICER_REACTIVATED',
+    targetTable: 'User',
+    targetId: user.id,
+    ip: req.ip,
+  });
+
+  send(res, 200, stripPassword(user));
 }
 
 // =================================================================

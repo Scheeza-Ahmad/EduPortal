@@ -147,7 +147,7 @@ export default function FinanceLayout({ children }: { children: ReactNode }) {
 
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 w-64 shrink-0 -translate-x-full border-r bg-muted/20 p-4 transition-transform duration-200 lg:static lg:w-56 lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-50 w-64 shrink-0 -translate-x-full border-r border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900 transition-transform duration-200 lg:static lg:w-56 lg:translate-x-0',
           mobileNavOpen && 'translate-x-0'
         )}
       >

@@ -47,6 +47,12 @@ app.get('/health', (req, res) => {
   res.status(200).json({ success: true, data: { status: 'ok' } });
 });
 
+// Lightweight keep-alive target for the frontend's periodic ping — avoids a
+// Railway cold start between requests during a quiet session.
+app.get('/ping', (req, res) => {
+  res.status(200).send('pong');
+});
+
 app.use('/api/auth', authRoutes);
 app.use('/api/super', superRoutes);
 app.use('/api/admin', adminRoutes);

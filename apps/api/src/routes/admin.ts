@@ -24,6 +24,7 @@ import {
   deleteTeacher,
   deleteTimetableSlot,
   createParent,
+  deactivateFinanceUser,
   getAdminLeaveRequests,
   getAnnouncements,
   getAtRiskStudents,
@@ -33,6 +34,7 @@ import {
   getConsentFormResponses,
   getConsentForms,
   getCoordinators,
+  getFinanceUsers,
   globalSearch,
   getParents,
   getReportCard,
@@ -44,10 +46,12 @@ import {
   getTimetableForClass,
   getWingReports,
   linkParentChildren,
+  reactivateFinanceUser,
   rejectWingReport,
   removeCoordinator,
   reviewAdminLeaveRequest,
   updateClass,
+  updateFinanceUser,
   updateStudent,
   updateSubject,
   updateTeacher,
@@ -121,6 +125,10 @@ router.patch('/parents/:id/children', linkParentChildren);
 
 // Finance user management
 router.post('/finance/create-user', createFinanceUser);
+router.get('/finance/users', getFinanceUsers);
+router.patch('/finance/users/:id', updateFinanceUser);
+router.patch('/finance/users/:id/deactivate', deactivateFinanceUser);
+router.patch('/finance/users/:id/reactivate', reactivateFinanceUser);
 
 // Wing reports (submitted by coordinators)
 router.get('/wing-reports', getWingReports);

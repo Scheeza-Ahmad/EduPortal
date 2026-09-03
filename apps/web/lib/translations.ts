@@ -51,6 +51,51 @@ export const translations = {
   classFees: { en: 'Class Fees', ur: 'کلاس فیس' },
   reportCard: { en: 'Report Card', ur: 'رپورٹ کارڈ' },
   leave: { en: 'Leave', ur: 'رخصت' },
+
+  // Actions
+  add: { en: 'Add', ur: 'شامل کریں' },
+  filter: { en: 'Filter', ur: 'فلٹر' },
+  download: { en: 'Download', ur: 'ڈاؤن لوڈ' },
+  submit: { en: 'Submit', ur: 'جمع کریں' },
+  create: { en: 'Create', ur: 'بنائیں' },
+  update: { en: 'Update', ur: 'اپ ڈیٹ' },
+  view: { en: 'View', ur: 'دیکھیں' },
+  settings: { en: 'Settings', ur: 'ترتیبات' },
+
+  // Common labels
+  name: { en: 'Name', ur: 'نام' },
+  email: { en: 'Email', ur: 'ای میل' },
+  password: { en: 'Password', ur: 'پاس ورڈ' },
+  phone: { en: 'Phone', ur: 'فون' },
+  address: { en: 'Address', ur: 'پتہ' },
+  date: { en: 'Date', ur: 'تاریخ' },
+  status: { en: 'Status', ur: 'حیثیت' },
+  active: { en: 'Active', ur: 'فعال' },
+  inactive: { en: 'Inactive', ur: 'غیر فعال' },
+  total: { en: 'Total', ur: 'کل' },
+  actions: { en: 'Actions', ur: 'اقدامات' },
+
+  // Status values
+  paid: { en: 'Paid', ur: 'ادا شدہ' },
+  pending: { en: 'Pending', ur: 'زیر التواء' },
+  overdue: { en: 'Overdue', ur: 'واجب الادا' },
+  approved: { en: 'Approved', ur: 'منظور شدہ' },
+  rejected: { en: 'Rejected', ur: 'مسترد شدہ' },
+  draft: { en: 'Draft', ur: 'مسودہ' },
+  submitted: { en: 'Submitted', ur: 'جمع شدہ' },
+
+  // Messages
+  noData: { en: 'No data', ur: 'کوئی ڈیٹا نہیں' },
+  success: { en: 'Success', ur: 'کامیابی' },
+  error: { en: 'Error', ur: 'خرابی' },
+
+  // Dashboard stats
+  totalStudents: { en: 'Total Students', ur: 'کل طلباء' },
+  totalTeachers: { en: 'Total Teachers', ur: 'کل اساتذہ' },
+  totalClasses: { en: 'Total Classes', ur: 'کل کلاسز' },
+  totalActivities: { en: 'Total Activities', ur: 'کل سرگرمیاں' },
+  attendanceRate: { en: 'Attendance Rate', ur: 'حاضری کی شرح' },
+  collectionRate: { en: 'Collection Rate', ur: 'وصولی کی شرح' },
 } as const satisfies Record<string, { en: string; ur: string }>;
 
 export function t(key: TranslationKey, lang: Language): string {

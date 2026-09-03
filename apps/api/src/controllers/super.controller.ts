@@ -36,9 +36,11 @@ export async function getStats(req: AuthRequest, res: Response): Promise<void> {
     // Snapshot of how many (still-active) schools existed at the start of last
     // month, so the dashboard can show real month-over-month growth.
     prisma.school.count({ where: { isActive: true, createdAt: { lt: startOfLastMonth } } }),
+    // Total users = every real platform user — super_admin is the platform
+    // operator, not a "user" in the school sense, so it's excluded here.
     prisma.user.groupBy({
       by: ['role'],
-      where: { isActive: true },
+      where: { isActive: true, role: { not: 'super_admin' } },
       _count: { role: true },
     }),
     prisma.submission.count(),
@@ -184,7 +186,7 @@ async function buildSchoolsOverview() {
     }),
     prisma.user.groupBy({
       by: ['schoolId'],
-      where: { schoolId: { in: schoolIds }, role: 'teacher', isActive: true },
+      where: { schoolId: { in: schoolIds }, role: { in: ['teacher', 'coordinator'] }, isActive: true },
       _count: { _all: true },
     }),
     prisma.submission.findMany({
