@@ -64,8 +64,8 @@ export default function StudentLeaveRequestPage() {
         '/api/student/leave-requests'
       );
       setRequests(res.data.data.requests);
-    } catch {
-      setError('Failed to load leave requests.');
+    } catch (err) {
+      setError(getErrorMessage(err, 'Failed to load leave requests.'));
     } finally {
       setLoading(false);
     }

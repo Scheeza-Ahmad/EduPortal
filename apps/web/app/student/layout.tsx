@@ -3,13 +3,13 @@
 import { ReactNode, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Loader2, Menu, X } from 'lucide-react';
+import { Bell, Loader2, Menu, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import { useLanguage } from '@/lib/LanguageContext';
 import { t } from '@/lib/translations';
-import { Button } from '@/components/ui/button';
+import { LogoutButton } from '@/components/logout-button';
 import { PortalToggles } from '@/components/portal-toggles';
 
 const NAV_ITEMS = [
@@ -32,12 +32,31 @@ export default function StudentLayout({ children }: { children: ReactNode }) {
   const [checkingSession, setCheckingSession] = useState(true);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   // Clear the pending indicator once the route has actually changed.
   useEffect(() => {
     setPendingHref(null);
     setMobileNavOpen(false);
   }, [pathname]);
+
+  // Refresh the unread count on every route change — cheap, and keeps the
+  // bell accurate right after the student reads/marks notifications.
+  useEffect(() => {
+    if (!accessToken) return;
+    let cancelled = false;
+    api
+      .get<{ success: boolean; data: { notifications: { isRead: boolean }[] } }>(
+        '/api/student/notifications'
+      )
+      .then((res) => {
+        if (!cancelled) setUnreadCount(res.data.data.notifications.filter((n) => !n.isRead).length);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, pathname]);
 
   useEffect(() => {
     // Access token lives in memory only, so it's gone after a page refresh.
@@ -156,10 +175,20 @@ export default function StudentLayout({ children }: { children: ReactNode }) {
             <span className="text-sm font-medium">{user?.name ?? 'Student'}</span>
           </div>
           <div className="flex items-center gap-2">
+            <Link
+              href="/student/notifications"
+              className="relative flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Notifications"
+            >
+              <Bell className="h-4 w-4" />
+              {unreadCount > 0 && (
+                <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-medium leading-none text-destructive-foreground">
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </span>
+              )}
+            </Link>
             <PortalToggles />
-            <Button variant="outline" size="sm" onClick={handleLogout}>
-              {t('logout', language)}
-            </Button>
+            <LogoutButton onConfirm={handleLogout} label={t('logout', language)} />
           </div>
         </header>
 

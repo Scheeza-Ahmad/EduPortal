@@ -9,7 +9,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import { useLanguage } from '@/lib/LanguageContext';
 import { t } from '@/lib/translations';
-import { Button } from '@/components/ui/button';
+import { LogoutButton } from '@/components/logout-button';
 import { PortalToggles } from '@/components/portal-toggles';
 
 const NAV_ITEMS = [
@@ -17,6 +17,7 @@ const NAV_ITEMS = [
   { href: '/teacher/activities', key: 'activities' as const },
   { href: '/teacher/attendance', key: 'attendance' as const },
   { href: '/teacher/classes', key: 'myClasses' as const },
+  { href: '/teacher/timetable', key: 'timetable' as const },
   { href: '/teacher/announcements', key: 'announcements' as const },
   { href: '/teacher/monthly-report', key: 'monthlyReport' as const },
   { href: '/teacher/class-fees', key: 'classFees' as const },
@@ -153,9 +154,7 @@ export default function TeacherLayout({ children }: { children: ReactNode }) {
           </div>
           <div className="flex items-center gap-2">
             <PortalToggles />
-            <Button variant="outline" size="sm" onClick={handleLogout}>
-              {t('logout', language)}
-            </Button>
+            <LogoutButton onConfirm={handleLogout} label={t('logout', language)} />
           </div>
         </header>
 

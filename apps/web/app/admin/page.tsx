@@ -9,6 +9,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useTranslation } from '@/lib/useTranslation';
+import { ErrorState } from '@/components/shared/ErrorState';
 import {
   Bar,
   BarChart,
@@ -113,12 +114,7 @@ export default function AdminDashboardPage() {
 
   if (error) {
     return (
-      <div className="space-y-3">
-        <p className="text-sm text-destructive">Failed to load. {error}</p>
-        <Button variant="outline" size="sm" onClick={() => setRetryKey((k) => k + 1)}>
-          Try Again
-        </Button>
-      </div>
+      <ErrorState message={`Failed to load. ${error}`} onRetry={() => setRetryKey((k) => k + 1)} />
     );
   }
 
@@ -240,7 +236,7 @@ function CoordinatorReportsSection() {
         {loading ? (
           <p className="text-sm text-muted-foreground">Loading...</p>
         ) : error ? (
-          <p className="text-sm text-destructive">{error}</p>
+          <ErrorState message={error} onRetry={loadReports} />
         ) : pending.length === 0 ? (
           <p className="text-sm text-muted-foreground">No wing reports awaiting review.</p>
         ) : (

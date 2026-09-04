@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import { Badge } from '@/components/ui/badge';
@@ -60,7 +61,8 @@ export default function MyClassesPage() {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {classes.map((c) => (
-            <Card key={c.id}>
+            <Link key={c.id} href={`/teacher/classes/${c.id}`} className="block">
+            <Card className="h-full transition-shadow hover:shadow-md">
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-base">
@@ -94,6 +96,7 @@ export default function MyClassesPage() {
                 )}
               </CardContent>
             </Card>
+            </Link>
           ))}
         </div>
       )}

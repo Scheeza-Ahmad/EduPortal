@@ -107,6 +107,19 @@ const COLOR_STYLES: Record<
 
 type Step = 'role-select' | 'login' | 'forgot-request' | 'forgot-reset';
 
+function roleLabel(role: string): string {
+  return ROLES.find((r) => r.value === role)?.label ?? role;
+}
+
+// A coordinator is an elevated teacher account — picking "Teacher" on the
+// role-select screen and logging in with coordinator credentials is not a
+// mismatch, it's the expected path for a promoted teacher.
+function rolesCompatible(selected: RoleValue, actual: string): boolean {
+  if (selected === actual) return true;
+  if (selected === 'teacher' && actual === 'coordinator') return true;
+  return false;
+}
+
 function getErrorMessage(err: unknown, fallback: string): string {
   const axiosErr = err as AxiosError<{ error?: string }>;
   return axiosErr.response?.data?.error ?? fallback;
@@ -125,6 +138,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
+  const [roleMismatchNotice, setRoleMismatchNotice] = useState<string | null>(null);
 
   // --- Forgot password: request code state ---
   const [forgotEmail, setForgotEmail] = useState('');
@@ -152,6 +166,7 @@ export default function LoginPage() {
   async function handleLogin(e: FormEvent) {
     e.preventDefault();
     setLoginError(null);
+    setRoleMismatchNotice(null);
     setLoginLoading(true);
 
     try {
@@ -161,12 +176,25 @@ export default function LoginPage() {
       );
       const { accessToken, user } = res.data.data;
       setAuth(accessToken, user);
+      const destination = ROLE_HOME[user.role] ?? '/login';
+
       // The role picked in Step 1 is purely for theming — the backend's
-      // actual role from the credentials decides where the user lands.
-      router.push(ROLE_HOME[user.role] ?? '/login');
+      // actual role from the credentials decides where the user lands. If
+      // they don't match, tell the user clearly why they're being sent
+      // somewhere other than the portal they clicked, instead of silently
+      // redirecting them and letting it look like a bug.
+      if (!rolesCompatible(selectedRole.value, user.role)) {
+        setRoleMismatchNotice(
+          `This account is registered as a ${roleLabel(user.role)}, not a ${selectedRole.label}. Redirecting you to the ${roleLabel(user.role)} portal...`
+        );
+        setLoginLoading(false);
+        setTimeout(() => router.push(destination), 1800);
+        return;
+      }
+
+      router.push(destination);
     } catch (err) {
       setLoginError(getErrorMessage(err, 'Something went wrong. Please try again.'));
-    } finally {
       setLoginLoading(false);
     }
   }
@@ -292,6 +320,12 @@ export default function LoginPage() {
             {loginNotice && (
               <p className="mb-4 rounded-md bg-green-50 px-3 py-2 text-sm text-green-700 dark:bg-green-950 dark:text-green-400">
                 {loginNotice}
+              </p>
+            )}
+
+            {roleMismatchNotice && (
+              <p className="mb-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-400">
+                {roleMismatchNotice}
               </p>
             )}
 

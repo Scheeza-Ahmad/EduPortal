@@ -80,4 +80,14 @@ api.interceptors.response.use(
   }
 );
 
+/** Uploads a file to Cloudinary via the backend and returns its URL. */
+export async function uploadFile(file: File): Promise<string> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await api.post<{ success: boolean; data: { url: string } }>('/api/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return res.data.data.url;
+}
+
 export default api;

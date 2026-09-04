@@ -67,6 +67,8 @@ interface StudentForm {
   dob: string;
   phone: string;
   address: string;
+  parentName: string;
+  parentEmail: string;
 }
 
 const EMPTY_FORM: StudentForm = {
@@ -78,6 +80,8 @@ const EMPTY_FORM: StudentForm = {
   dob: '',
   phone: '',
   address: '',
+  parentName: '',
+  parentEmail: '',
 };
 
 const PAGE_LIMIT = 20;
@@ -98,6 +102,7 @@ export default function StudentsPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
   const [csvText, setCsvText] = useState('');
@@ -155,6 +160,7 @@ export default function StudentsPage() {
     setEditingStudent(null);
     setForm(EMPTY_FORM);
     setFormError(null);
+    setSuccessMsg(null);
     setDialogOpen(true);
   }
 
@@ -169,6 +175,8 @@ export default function StudentsPage() {
       dob: student.studentProfile?.dob ? student.studentProfile.dob.slice(0, 10) : '',
       phone: student.studentProfile?.phone ?? '',
       address: student.studentProfile?.address ?? '',
+      parentName: '',
+      parentEmail: '',
     });
     setFormError(null);
     setDialogOpen(true);
@@ -191,7 +199,10 @@ export default function StudentsPage() {
           address: form.address || undefined,
         });
       } else {
-        await api.post('/api/admin/students', {
+        const res = await api.post<{
+          success: boolean;
+          data: { parentAutoCreated: boolean; parentEmail?: string };
+        }>('/api/admin/students', {
           name: form.name,
           email: form.email,
           password: form.password,
@@ -200,7 +211,16 @@ export default function StudentsPage() {
           dob: form.dob || undefined,
           phone: form.phone || undefined,
           address: form.address || undefined,
+          parentName: form.parentName || undefined,
+          parentEmail: form.parentEmail || undefined,
         });
+        if (res.data.data.parentAutoCreated) {
+          setSuccessMsg(
+            `Student created — a new parent account was auto-created for ${res.data.data.parentEmail} and emailed their login details.`
+          );
+        } else if (form.parentEmail) {
+          setSuccessMsg('Student created and linked to the existing parent account.');
+        }
       }
       setDialogOpen(false);
       await loadStudents();
@@ -262,6 +282,12 @@ export default function StudentsPage() {
           <Button onClick={openAddDialog}>Add Student</Button>
         </div>
       </div>
+
+      {successMsg && (
+        <div className="rounded-md border border-green-300 bg-green-50 px-4 py-2 text-sm text-green-800">
+          {successMsg}
+        </div>
+      )}
 
       <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0">
@@ -479,6 +505,38 @@ export default function StudentsPage() {
                 onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
               />
             </div>
+
+            {!editingStudent && (
+              <div className="space-y-2 rounded-md border border-dashed p-3">
+                <p className="text-xs font-medium text-muted-foreground">
+                  Parent account (optional) — leave blank to link one later
+                </p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="parent-name">Parent Name</Label>
+                    <Input
+                      id="parent-name"
+                      value={form.parentName}
+                      onChange={(e) => setForm((f) => ({ ...f, parentName: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="parent-email">Parent Email</Label>
+                    <Input
+                      id="parent-email"
+                      type="email"
+                      value={form.parentEmail}
+                      onChange={(e) => setForm((f) => ({ ...f, parentEmail: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  If this email already belongs to a parent at this school, the student is linked to
+                  that account (siblings share one login). Otherwise a new parent account is
+                  auto-created and emailed their credentials.
+                </p>
+              </div>
+            )}
 
             {formError && (
               <p className="text-sm text-destructive" role="alert">

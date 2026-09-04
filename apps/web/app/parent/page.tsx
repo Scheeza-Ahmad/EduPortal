@@ -6,6 +6,7 @@ import { useParentStore } from '@/lib/parentStore';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ErrorState } from '@/components/shared/ErrorState';
 
 interface ReportCard {
   overallPercentage: number;
@@ -34,6 +35,7 @@ export default function ParentDashboardPage() {
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     if (!selectedChildId) return;
@@ -58,7 +60,7 @@ export default function ParentDashboardPage() {
       })
       .catch(() => setError('Failed to load dashboard.'))
       .finally(() => setLoading(false));
-  }, [selectedChildId]);
+  }, [selectedChildId, retryKey]);
 
   if (loading) {
     return (
@@ -89,7 +91,7 @@ export default function ParentDashboardPage() {
     );
   }
 
-  if (error) return <p className="text-sm text-destructive">{error}</p>;
+  if (error) return <ErrorState message={error} onRetry={() => setRetryKey((k) => k + 1)} />;
 
   return (
     <div className="space-y-6">

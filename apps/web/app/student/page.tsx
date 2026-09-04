@@ -1,10 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { api } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ErrorState } from '@/components/shared/ErrorState';
 
 type BadgeType = 'perfect_week' | 'top_of_class' | 'streak_7';
 
@@ -44,13 +46,24 @@ interface Dashboard {
   badges: BadgeRow[];
 }
 
+interface SubjectCard {
+  id: string;
+  name: string;
+  creditHours: number;
+  teacher: { id: string; name: string } | null;
+}
+
 export default function StudentDashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [subjects, setSubjects] = useState<SubjectCard[]>([]);
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setError(null);
 
     api
       .get<{ success: boolean; data: Dashboard }>('/api/student/dashboard')
@@ -64,10 +77,17 @@ export default function StudentDashboardPage() {
         if (!cancelled) setLoading(false);
       });
 
+    api
+      .get<{ success: boolean; data: { subjects: SubjectCard[] } }>('/api/student/subjects')
+      .then((res) => {
+        if (!cancelled) setSubjects(res.data.data.subjects);
+      })
+      .catch(() => {});
+
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [retryKey]);
 
   if (loading) {
     return (
@@ -102,7 +122,7 @@ export default function StudentDashboardPage() {
     );
   }
 
-  if (error) return <p className="text-sm text-destructive">{error}</p>;
+  if (error) return <ErrorState message={error} onRetry={() => setRetryKey((k) => k + 1)} />;
   if (!data) return null;
 
   return (
@@ -139,6 +159,28 @@ export default function StudentDashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      {subjects.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">My Subjects</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {subjects.map((s) => (
+                <Link key={s.id} href={`/student/subjects/${s.id}`} className="block">
+                  <div className="rounded-md border p-3 text-sm transition-colors hover:bg-muted">
+                    <p className="font-medium">{s.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {s.teacher ? s.teacher.name : 'No teacher assigned'} · {s.creditHours} credit hours
+                    </p>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>

@@ -9,7 +9,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import { useLanguage } from '@/lib/LanguageContext';
 import { t } from '@/lib/translations';
-import { Button } from '@/components/ui/button';
+import { LogoutButton } from '@/components/logout-button';
 import { Badge } from '@/components/ui/badge';
 import { PortalToggles } from '@/components/portal-toggles';
 import { AdminSearchBar } from '@/components/admin-search-bar';
@@ -182,9 +182,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
 
           <div className="flex items-center gap-2">
             <PortalToggles />
-            <Button variant="outline" size="sm" onClick={handleLogout}>
-              {t('logout', language)}
-            </Button>
+            <LogoutButton onConfirm={handleLogout} label={t('logout', language)} />
           </div>
         </header>
 

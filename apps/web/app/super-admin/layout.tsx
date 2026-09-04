@@ -9,7 +9,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import { useLanguage } from '@/lib/LanguageContext';
 import { t } from '@/lib/translations';
-import { Button } from '@/components/ui/button';
+import { LogoutButton } from '@/components/logout-button';
 import { PortalToggles } from '@/components/portal-toggles';
 
 const NAV_ITEMS = [
@@ -149,9 +149,7 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
           </div>
           <div className="flex items-center gap-2">
             <PortalToggles />
-            <Button variant="outline" size="sm" onClick={handleLogout}>
-              {t('logout', language)}
-            </Button>
+            <LogoutButton onConfirm={handleLogout} label={t('logout', language)} />
           </div>
         </header>
 

@@ -9,11 +9,12 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import { useLanguage } from '@/lib/LanguageContext';
 import { t } from '@/lib/translations';
-import { Button } from '@/components/ui/button';
+import { LogoutButton } from '@/components/logout-button';
 import { PortalToggles } from '@/components/portal-toggles';
 
 const NAV_ITEMS = [
   { href: '/coordinator', key: 'dashboard' as const },
+  { href: '/coordinator/activities', key: 'activities' as const },
   { href: '/coordinator/teachers', key: 'teachers' as const },
   { href: '/coordinator/reports', key: 'reports' as const },
   { href: '/coordinator/students', key: 'students' as const },
@@ -150,9 +151,7 @@ export default function CoordinatorLayout({ children }: { children: ReactNode })
           </div>
           <div className="flex items-center gap-2">
             <PortalToggles />
-            <Button variant="outline" size="sm" onClick={handleLogout}>
-              {t('logout', language)}
-            </Button>
+            <LogoutButton onConfirm={handleLogout} label={t('logout', language)} />
           </div>
         </header>
 

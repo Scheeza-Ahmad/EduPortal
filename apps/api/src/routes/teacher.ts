@@ -10,6 +10,7 @@ import {
   getActivity,
   getAttendanceForDate,
   getAttendanceReport,
+  getClassDetail,
   getClassFees,
   getDashboard,
   getFeeDefaulters,
@@ -21,6 +22,7 @@ import {
   getReusableActivities,
   getSubmissions,
   getTeacherLeaveRequests,
+  getTeacherTimetable,
   gradeSubmission,
   markAttendance,
   messageParent,
@@ -70,6 +72,8 @@ router.post('/attendance', markAttendance);
 // My classes & subjects
 router.get('/subjects', getMySubjects);
 router.get('/classes', getMyClasses);
+router.get('/classes/:classId', getClassDetail);
+router.get('/timetable', getTeacherTimetable);
 
 // Announcements
 router.get('/announcements', getMyClassAnnouncements);

@@ -51,6 +51,7 @@ export default function FeeStructurePage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
 
   async function loadStructures() {
     setLoading(true);
@@ -75,6 +76,25 @@ export default function FeeStructurePage() {
     setForm({ classNumber: '1', monthYear: '', baseFee: '', dueDate: '' });
     setFormError(null);
     setDialogOpen(true);
+  }
+
+  async function handleSync(structureId: string) {
+    setSyncingId(structureId);
+    setError(null);
+    try {
+      const res = await api.post<{ success: boolean; data: { syncedCount: number } }>(
+        `/api/finance/fee-structure/${structureId}/sync`
+      );
+      setSuccessMsg(
+        res.data.data.syncedCount > 0
+          ? `Synced ${res.data.data.syncedCount} student fee record(s).`
+          : 'Already up to date — no new students to sync.'
+      );
+    } catch (err) {
+      setError(getErrorMessage(err, 'Failed to sync students.'));
+    } finally {
+      setSyncingId(null);
+    }
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -139,6 +159,14 @@ export default function FeeStructurePage() {
                       <span className="font-medium">{s.monthYear}</span>
                       <span className="text-muted-foreground">Base Fee: PKR {s.baseFee.toLocaleString()}</span>
                       <span className="text-muted-foreground">Due: {fmtDate(s.dueDate)}</span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={syncingId === s.id}
+                        onClick={() => handleSync(s.id)}
+                      >
+                        {syncingId === s.id ? 'Syncing...' : 'Sync Students'}
+                      </Button>
                     </div>
                   ))}
                 </div>

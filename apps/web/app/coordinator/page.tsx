@@ -6,6 +6,7 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { ErrorState } from '@/components/shared/ErrorState';
 import {
   Bar,
   BarChart,
@@ -113,17 +114,20 @@ export default function CoordinatorDashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
+    setLoading(true);
+    setError(null);
     api
       .get<{ success: boolean; data: Dashboard }>('/api/coordinator/dashboard')
       .then((res) => setData(res.data.data))
       .catch(() => setError('Failed to load dashboard.'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [retryKey]);
 
   if (loading) return <p className="text-sm text-muted-foreground">Loading dashboard...</p>;
-  if (error) return <p className="text-sm text-destructive">{error}</p>;
+  if (error) return <ErrorState message={error} onRetry={() => setRetryKey((k) => k + 1)} />;
   if (!data) return null;
 
   const teacherChartData = data.teacherActivity.map((t) => ({

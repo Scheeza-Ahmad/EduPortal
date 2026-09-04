@@ -19,6 +19,7 @@ function friendlyType(type: string): string {
   if (type.startsWith('DUE_DATE_REMINDER_24H')) return 'Due Soon';
   if (type.startsWith('DUE_DATE_REMINDER_2H')) return 'Due Very Soon';
   if (type === 'ABSENCE_STREAK') return 'Attendance';
+  if (type === 'ACTIVITY_PUBLISHED') return 'New Activity';
   return type.replace(/_/g, ' ');
 }
 

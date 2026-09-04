@@ -10,7 +10,7 @@ import { useAuthStore } from '@/lib/store';
 import { useParentStore, Child } from '@/lib/parentStore';
 import { useLanguage } from '@/lib/LanguageContext';
 import { t } from '@/lib/translations';
-import { Button } from '@/components/ui/button';
+import { LogoutButton } from '@/components/logout-button';
 import { PortalToggles } from '@/components/portal-toggles';
 import {
   Select,
@@ -188,9 +188,7 @@ export default function ParentLayout({ children }: { children: ReactNode }) {
           </div>
           <div className="flex items-center gap-2">
             <PortalToggles />
-            <Button variant="outline" size="sm" onClick={handleLogout}>
-              {t('logout', language)}
-            </Button>
+            <LogoutButton onConfirm={handleLogout} label={t('logout', language)} />
           </div>
         </header>
 

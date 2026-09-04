@@ -368,6 +368,64 @@ export async function createFeeStructure(req: AuthRequest, res: Response): Promi
   }
 }
 
+// POST /api/finance/fee-structure/:id/sync — catches up students who joined
+// the class after this structure was created (and so never got a StudentFee).
+export async function syncFeeStructure(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const structure = await prisma.feeStructure.findFirst({ where: { id: req.params.id, schoolId } });
+  if (!structure) {
+    send(res, 404, undefined, 'Fee structure not found');
+    return;
+  }
+
+  const studentsInClass = await prisma.studentProfile.findMany({
+    where: { class: { schoolId, number: structure.classNumber } },
+    select: { userId: true },
+  });
+
+  const existingFees = await prisma.studentFee.findMany({
+    where: { feeStructureId: structure.id },
+    select: { studentId: true },
+  });
+  const alreadyHasFee = new Set(existingFees.map((f) => f.studentId));
+  const missingStudents = studentsInClass.filter((s) => !alreadyHasFee.has(s.userId));
+
+  let syncedCount = 0;
+  if (missingStudents.length > 0) {
+    const created = await prisma.studentFee.createMany({
+      data: missingStudents.map((s) => ({
+        studentId: s.userId,
+        feeStructureId: structure.id,
+        schoolId,
+        discountPercent: 0,
+        baseFee: structure.baseFee,
+        discountAmount: 0,
+        netPayable: structure.baseFee,
+        paidAmount: 0,
+        lateFine: 0,
+        totalDue: structure.baseFee,
+        status: 'unpaid' as FeeStatus,
+        dueDate: structure.dueDate,
+      })),
+      skipDuplicates: true,
+    });
+    syncedCount = created.count;
+  }
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'FEE_STRUCTURE_SYNC',
+    targetTable: 'FeeStructure',
+    targetId: structure.id,
+    meta: { syncedCount },
+    ip: req.ip,
+  });
+
+  send(res, 200, { syncedCount });
+}
+
 // =================================================================
 // 4. Student Fees
 // =================================================================

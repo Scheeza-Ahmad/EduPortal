@@ -22,6 +22,7 @@ import {
   getStudentFees,
   recordPayment,
   submitFinanceReport,
+  syncFeeStructure,
   updateDiscountPolicy,
   upsertLateFeeRule,
   upsertSchoolSettings,
@@ -53,6 +54,7 @@ router.delete('/discount-policies/:id', deleteDiscountPolicy);
 // Fee Structure
 router.get('/fee-structure', getFeeStructure);
 router.post('/fee-structure', createFeeStructure);
+router.post('/fee-structure/:id/sync', syncFeeStructure);
 
 // Student Fees
 router.get('/student-fees', getStudentFees);

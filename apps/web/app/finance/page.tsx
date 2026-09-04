@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { ErrorState } from '@/components/shared/ErrorState';
 import {
   Area,
   AreaChart,
@@ -102,6 +103,7 @@ export default function FinanceDashboardPage() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
 
   // Month-dependent (KPI cards + donut).
   useEffect(() => {
@@ -113,7 +115,7 @@ export default function FinanceDashboardPage() {
       .then((res) => setStats(res.data.data))
       .catch(() => setError('Failed to load finance stats.'))
       .finally(() => setLoading(false));
-  }, [monthYear]);
+  }, [monthYear, retryKey]);
 
   // Independent of the selected month — fetched once.
   useEffect(() => {
@@ -172,7 +174,7 @@ export default function FinanceDashboardPage() {
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading...</p>
       ) : error ? (
-        <p className="text-sm text-destructive">{error}</p>
+        <ErrorState message={error} onRetry={() => setRetryKey((k) => k + 1)} />
       ) : !stats ? (
         <p className="text-sm text-muted-foreground">No data for this month yet.</p>
       ) : (

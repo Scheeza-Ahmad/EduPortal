@@ -12,7 +12,9 @@ import {
   getGrades,
   getMyFees,
   getMyLeaveRequests,
+  getMySubjects,
   getNotifications,
+  getSubjectActivities,
   getSubmissions,
   markNotificationRead,
   submitActivity,
@@ -25,6 +27,8 @@ router.use(verifyToken, requireRole('student'));
 router.get('/dashboard', getDashboard);
 
 router.get('/activities', getActivities);
+router.get('/subjects', getMySubjects);
+router.get('/subjects/:subjectId/activities', getSubjectActivities);
 
 router.post('/submit/:activityId', submitActivity);
 router.get('/submissions', getSubmissions);

@@ -6,6 +6,7 @@ import { api } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ErrorState } from '@/components/shared/ErrorState';
 
 interface SubjectWithClass {
   id: string;
@@ -31,6 +32,13 @@ interface RecentAction {
   id: string;
   action: string;
   createdAt: string;
+}
+
+interface ClassCard {
+  id: string;
+  number: number;
+  section: string;
+  wing: 'junior' | 'senior' | 'both';
 }
 
 interface Dashboard {
@@ -69,8 +77,13 @@ export default function TeacherDashboardPage() {
 
   const [pendingLeaveRequests, setPendingLeaveRequests] = useState<LeaveRequestRow[]>([]);
 
+  const [classes, setClasses] = useState<ClassCard[]>([]);
+  const [retryKey, setRetryKey] = useState(0);
+
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setError(null);
 
     api
       .get<{ success: boolean; data: Dashboard }>('/api/teacher/dashboard')
@@ -104,10 +117,17 @@ export default function TeacherDashboardPage() {
       })
       .catch(() => {});
 
+    api
+      .get<{ success: boolean; data: { classes: ClassCard[] } }>('/api/teacher/classes')
+      .then((res) => {
+        if (!cancelled) setClasses(res.data.data.classes);
+      })
+      .catch(() => {});
+
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [retryKey]);
 
   if (loading) {
     return (
@@ -153,7 +173,7 @@ export default function TeacherDashboardPage() {
       </div>
     );
   }
-  if (error) return <p className="text-sm text-destructive">{error}</p>;
+  if (error) return <ErrorState message={error} onRetry={() => setRetryKey((k) => k + 1)} />;
   if (!data) return null;
 
   return (
@@ -195,6 +215,34 @@ export default function TeacherDashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      {classes.length > 0 && (
+        <Card>
+          <CardHeader className="flex-row items-center justify-between space-y-0">
+            <CardTitle className="text-base">My Classes</CardTitle>
+            <Link href="/teacher/classes" className="text-sm text-primary hover:underline">
+              View all →
+            </Link>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {classes.map((c) => (
+                <Link key={c.id} href={`/teacher/classes/${c.id}`} className="block">
+                  <div className="flex items-center justify-between rounded-md border p-3 text-sm transition-colors hover:bg-muted">
+                    <span className="font-medium">
+                      Class {c.number}
+                      {c.section}
+                    </span>
+                    <Badge variant="outline" className="capitalize">
+                      {c.wing}
+                    </Badge>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>

@@ -308,6 +308,32 @@ export async function publishActivity(req: AuthRequest, res: Response): Promise<
     ip: req.ip,
   });
 
+  // Best-effort — publishing already succeeded above, so a notification
+  // failure shouldn't fail the request.
+  try {
+    const subject = await prisma.subject.findUnique({
+      where: { id: updated.subjectId },
+      select: { name: true, classId: true },
+    });
+    if (subject) {
+      const students = await prisma.studentProfile.findMany({
+        where: { classId: subject.classId, user: { isActive: true } },
+        select: { userId: true },
+      });
+      if (students.length > 0) {
+        await prisma.notification.createMany({
+          data: students.map((s) => ({
+            userId: s.userId,
+            type: 'ACTIVITY_PUBLISHED',
+            message: `New ${updated.type} in ${subject.name}: "${updated.title}" — due ${updated.dueDate.toLocaleDateString()}.`,
+          })),
+        });
+      }
+    }
+  } catch (err) {
+    console.error('[publishActivity] Failed to notify students', { activityId: id, err });
+  }
+
   send(res, 200, updated);
 }
 
@@ -589,6 +615,63 @@ export async function getMyClasses(req: AuthRequest, res: Response): Promise<voi
   const byId = new Map([...subjectClasses, ...classTeacherClasses].map((c) => [c.id, c]));
 
   send(res, 200, { classes: Array.from(byId.values()) });
+}
+
+// GET /api/teacher/classes/:classId — roster + this teacher's subjects for
+// one of "my classes" (same scope rule as getMyClasses: I teach a subject
+// there, or I'm the assigned class teacher).
+export async function getClassDetail(req: AuthRequest, res: Response): Promise<void> {
+  const teacherId = req.user!.userId;
+  const { classId } = req.params;
+
+  const classItem = await prisma.class.findFirst({
+    where: {
+      id: classId,
+      OR: [{ subjects: { some: { teacherId } } }, { classTeacherId: teacherId }],
+    },
+  });
+  if (!classItem) {
+    send(res, 404, undefined, 'Class not found or you are not assigned to it');
+    return;
+  }
+
+  const [mySubjectsHere, students] = await Promise.all([
+    prisma.subject.findMany({
+      where: { classId, teacherId, isActive: true },
+      orderBy: { name: 'asc' },
+    }),
+    prisma.studentProfile.findMany({
+      where: { classId, user: { isActive: true } },
+      include: { user: { select: { id: true, name: true, email: true } } },
+      orderBy: { rollNo: 'asc' },
+    }),
+  ]);
+
+  send(res, 200, {
+    class: classItem,
+    isClassTeacher: classItem.classTeacherId === teacherId,
+    mySubjectsHere,
+    students: students.map((s) => ({
+      id: s.userId,
+      name: s.user.name,
+      email: s.user.email,
+      rollNo: s.rollNo,
+    })),
+  });
+}
+
+// GET /api/teacher/timetable — every slot across every class where this
+// teacher is the assigned subject teacher, ordered for a weekly grid.
+export async function getTeacherTimetable(req: AuthRequest, res: Response): Promise<void> {
+  const teacherId = req.user!.userId;
+
+  const slots = await prisma.timetableSlot.findMany({
+    where: { subject: { teacherId } },
+    include: { subject: { select: { id: true, name: true } }, class: { select: { id: true, number: true, section: true } } },
+    orderBy: [{ dayOfWeek: 'asc' }, { startTime: 'asc' }],
+  });
+
+  send(res, 200, { slots });
 }
 
 // =================================================================

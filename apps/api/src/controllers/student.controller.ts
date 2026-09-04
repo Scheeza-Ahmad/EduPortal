@@ -160,6 +160,78 @@ export async function getActivities(req: AuthRequest, res: Response): Promise<vo
   send(res, 200, { activities: filtered });
 }
 
+// GET /api/student/subjects — subjects in the student's own class, for the
+// dashboard's subject cards.
+export async function getMySubjects(req: AuthRequest, res: Response): Promise<void> {
+  const profile = await requireStudentProfile(req, res);
+  if (!profile) return;
+
+  const subjects = await prisma.subject.findMany({
+    where: { classId: profile.classId, isActive: true },
+    include: { teacher: { select: { id: true, name: true } } },
+    orderBy: { name: 'asc' },
+  });
+
+  send(res, 200, { subjects });
+}
+
+// GET /api/student/subjects/:subjectId/activities — same shape as
+// getActivities, scoped to one subject via a path param instead of a query
+// filter, plus the subject's own details for the page header.
+export async function getSubjectActivities(req: AuthRequest, res: Response): Promise<void> {
+  const profile = await requireStudentProfile(req, res);
+  if (!profile) return;
+  const { subjectId } = req.params;
+
+  const subject = await prisma.subject.findFirst({
+    where: { id: subjectId, classId: profile.classId, isActive: true },
+    include: { teacher: { select: { id: true, name: true } } },
+  });
+  if (!subject) {
+    send(res, 404, undefined, 'Subject not found in your class');
+    return;
+  }
+
+  const activities = await prisma.activity.findMany({
+    where: { subjectId, isDraft: false, isActive: true },
+    include: {
+      submissions: { where: { studentId: profile.id }, include: { grade: true } },
+    },
+    orderBy: { dueDate: 'asc' },
+  });
+
+  const withStatus = activities.map((activity) => {
+    const mySubmission = activity.submissions[0] ?? null;
+    const status: SubmissionStatus = !mySubmission
+      ? 'pending'
+      : mySubmission.isLate
+        ? 'late'
+        : 'submitted';
+
+    return {
+      id: activity.id,
+      title: activity.title,
+      type: activity.type,
+      description: activity.description,
+      dueDate: activity.dueDate,
+      totalMarks: activity.totalMarks,
+      fileUrl: activity.fileUrl,
+      isLocked: activity.isLocked,
+      status,
+      mySubmission: mySubmission
+        ? {
+            id: mySubmission.id,
+            submittedAt: mySubmission.submittedAt,
+            isLate: mySubmission.isLate,
+            grade: mySubmission.grade,
+          }
+        : null,
+    };
+  });
+
+  send(res, 200, { subject, activities: withStatus });
+}
+
 // =================================================================
 // 3. Submissions
 // =================================================================
@@ -511,19 +583,42 @@ export async function createLeaveRequest(req: AuthRequest, res: Response): Promi
   }
   const { reason, fromDate, toDate } = parsed.data;
 
-  const leaveRequest = await prisma.leaveRequest.create({
-    data: { requesterId: userId, reason, startDate: fromDate, endDate: toDate, status: 'pending' },
-  });
-
-  if (profile.class.classTeacherId) {
-    const student = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
-    await prisma.notification.create({
-      data: {
-        userId: profile.class.classTeacherId,
-        type: 'LEAVE_REQUEST_SUBMITTED',
-        message: `${student?.name ?? 'A student'} requested leave from ${fromDate.toLocaleDateString()} to ${toDate.toLocaleDateString()}.`,
-      },
+  let leaveRequest;
+  try {
+    leaveRequest = await prisma.leaveRequest.create({
+      data: { requesterId: userId, reason, startDate: fromDate, endDate: toDate, status: 'pending' },
     });
+  } catch (err) {
+    console.error('[createLeaveRequest] Failed to create leave request', {
+      userId,
+      reason,
+      fromDate,
+      toDate,
+      err,
+    });
+    send(res, 500, undefined, 'Failed to submit leave request. Please try again.');
+    return;
+  }
+
+  // Notifying the class teacher is best-effort — the request itself already
+  // succeeded above, so a notification failure shouldn't fail the request.
+  if (profile.class.classTeacherId) {
+    try {
+      const student = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
+      await prisma.notification.create({
+        data: {
+          userId: profile.class.classTeacherId,
+          type: 'LEAVE_REQUEST_SUBMITTED',
+          message: `${student?.name ?? 'A student'} requested leave from ${fromDate.toLocaleDateString()} to ${toDate.toLocaleDateString()}.`,
+        },
+      });
+    } catch (err) {
+      console.error('[createLeaveRequest] Failed to notify class teacher', {
+        classTeacherId: profile.class.classTeacherId,
+        leaveRequestId: leaveRequest.id,
+        err,
+      });
+    }
   }
 
   send(res, 201, leaveRequest);

@@ -4,7 +4,6 @@ import { FormEvent, useEffect, useState } from 'react';
 import { AxiosError } from 'axios';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
@@ -31,6 +30,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { FileUploadField } from '@/components/file-upload-field';
 
 type Status = 'pending' | 'submitted' | 'late';
 
@@ -273,13 +273,8 @@ export default function StudentActivitiesPage() {
             )}
 
             <div className="space-y-2">
-              <Label htmlFor="submit-file">File URL (optional)</Label>
-              <Input
-                id="submit-file"
-                placeholder="https://..."
-                value={fileUrl}
-                onChange={(e) => setFileUrl(e.target.value)}
-              />
+              <Label htmlFor="submit-file">Attachment (optional)</Label>
+              <FileUploadField id="submit-file" value={fileUrl} onChange={setFileUrl} label="Attachment" />
             </div>
 
             <div className="space-y-2">

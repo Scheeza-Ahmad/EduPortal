@@ -32,6 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { FileUploadField } from '@/components/file-upload-field';
 
 type ActivityType = 'assignment' | 'quiz' | 'project' | 'presentation';
 
@@ -453,11 +454,12 @@ export default function TeacherActivitiesPage() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="activity-file">File URL (optional, Cloudinary)</Label>
-              <Input
+              <Label htmlFor="activity-file">Attachment (optional)</Label>
+              <FileUploadField
                 id="activity-file"
                 value={form.fileUrl}
-                onChange={(e) => setForm((f) => ({ ...f, fileUrl: e.target.value }))}
+                onChange={(url) => setForm((f) => ({ ...f, fileUrl: url }))}
+                label="Attachment"
               />
             </div>
 

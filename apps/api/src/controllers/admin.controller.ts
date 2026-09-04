@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
@@ -163,6 +164,12 @@ const createStudentSchema = z.object({
   dob: z.string().optional(),
   phone: z.string().optional(),
   address: z.string().optional(),
+  // Optional — when given, either links to an existing parent account with
+  // this email (so siblings share one parent login) or auto-creates a new
+  // one. Omit both to leave the student unlinked; admin can link a parent
+  // later from the student's edit screen.
+  parentName: z.string().min(1).optional(),
+  parentEmail: z.string().email().optional(),
 });
 
 export async function createStudent(req: AuthRequest, res: Response): Promise<void> {
@@ -174,7 +181,8 @@ export async function createStudent(req: AuthRequest, res: Response): Promise<vo
     send(res, 400, undefined, 'Invalid student data');
     return;
   }
-  const { name, email, password, classId, rollNo, dob, phone, address } = parsed.data;
+  const { name, email, password, classId, rollNo, dob, phone, address, parentName, parentEmail } =
+    parsed.data;
 
   const targetClass = await prisma.class.findFirst({ where: { id: classId, schoolId } });
   if (!targetClass) {
@@ -184,25 +192,66 @@ export async function createStudent(req: AuthRequest, res: Response): Promise<vo
 
   const hashedPassword = await bcrypt.hash(password, 12);
 
+  // Resolve the parent link before creating the student, so a bad parent
+  // email fails the whole request cleanly instead of leaving a half-linked
+  // student behind.
+  let parentId: string | undefined;
+  let newParentPlaintextPassword: string | undefined;
+  let newParentEmail: string | undefined;
+  let newParentName: string | undefined;
+
+  if (parentEmail) {
+    const existingParent = await prisma.user.findUnique({ where: { email: parentEmail } });
+    if (existingParent) {
+      if (existingParent.role !== 'parent' || existingParent.schoolId !== schoolId) {
+        send(res, 400, undefined, 'That email belongs to an account that is not a parent at this school');
+        return;
+      }
+      parentId = existingParent.id;
+    } else {
+      // Auto-create the parent account. Uses parentName if given, else a
+      // sensible default derived from the student's name.
+      newParentPlaintextPassword = crypto.randomBytes(6).toString('hex');
+      newParentEmail = parentEmail;
+      newParentName = parentName?.trim() || `${name}'s Parent`;
+    }
+  }
+
   try {
-    const user = await prisma.user.create({
-      data: {
-        name,
-        email,
-        password: hashedPassword,
-        role: 'student',
-        schoolId,
-        studentProfile: {
-          create: {
-            classId,
-            rollNo,
-            dob: dob ? new Date(dob) : undefined,
-            phone,
-            address,
+    const user = await prisma.$transaction(async (tx) => {
+      if (!parentId && newParentEmail) {
+        const parentUser = await tx.user.create({
+          data: {
+            name: newParentName!,
+            email: newParentEmail,
+            password: await bcrypt.hash(newParentPlaintextPassword!, 12),
+            role: 'parent',
+            schoolId,
+          },
+        });
+        parentId = parentUser.id;
+      }
+
+      return tx.user.create({
+        data: {
+          name,
+          email,
+          password: hashedPassword,
+          role: 'student',
+          schoolId,
+          studentProfile: {
+            create: {
+              classId,
+              rollNo,
+              dob: dob ? new Date(dob) : undefined,
+              phone,
+              address,
+              parentId,
+            },
           },
         },
-      },
-      include: { studentProfile: true },
+        include: { studentProfile: true },
+      });
     });
 
     await auditLog({
@@ -210,12 +259,13 @@ export async function createStudent(req: AuthRequest, res: Response): Promise<vo
       action: 'STUDENT_CREATE',
       targetTable: 'User',
       targetId: user.id,
-      meta: { email, classId, rollNo },
+      meta: { email, classId, rollNo, parentId: parentId ?? null, parentAutoCreated: Boolean(newParentEmail) },
       ip: req.ip,
     });
 
+    const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } });
+
     try {
-      const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } });
       await sendWelcomeEmail({
         name,
         email,
@@ -227,7 +277,25 @@ export async function createStudent(req: AuthRequest, res: Response): Promise<vo
       console.warn('[createStudent] Welcome email failed:', err);
     }
 
-    send(res, 201, stripPassword(user));
+    if (newParentEmail && newParentPlaintextPassword) {
+      try {
+        await sendWelcomeEmail({
+          name: newParentName!,
+          email: newParentEmail,
+          role: 'parent',
+          schoolName: school?.name ?? 'your school',
+          password: newParentPlaintextPassword,
+        });
+      } catch (err) {
+        console.warn('[createStudent] Parent welcome email failed:', err);
+      }
+    }
+
+    send(res, 201, {
+      ...stripPassword(user),
+      parentAutoCreated: Boolean(newParentEmail),
+      parentEmail: newParentEmail ?? undefined,
+    });
   } catch (err) {
     if (isUniqueConstraintError(err)) {
       send(res, 400, undefined, 'Email already in use');
@@ -2008,27 +2076,37 @@ export async function getAdminLeaveRequests(req: AuthRequest, res: Response): Pr
 
   const { status, class: classId, from, to } = req.query;
 
-  const requests = await prisma.leaveRequest.findMany({
-    where: {
-      status: status && status !== 'all' ? (String(status) as 'pending' | 'approved' | 'rejected') : undefined,
-      requester: {
-        schoolId,
-        ...(typeof classId === 'string' ? { studentProfile: { classId } } : {}),
+  let requests;
+  try {
+    // schoolId is enforced via the requester relation (LeaveRequest has no
+    // schoolId column of its own — every requester is a User, and every
+    // User in this school has User.schoolId === schoolId).
+    requests = await prisma.leaveRequest.findMany({
+      where: {
+        status: status && status !== 'all' ? (String(status) as 'pending' | 'approved' | 'rejected') : undefined,
+        requester: {
+          schoolId,
+          ...(typeof classId === 'string' ? { studentProfile: { classId } } : {}),
+        },
+        ...(from ? { startDate: { gte: new Date(String(from)) } } : {}),
+        ...(to ? { endDate: { lte: new Date(String(to)) } } : {}),
       },
-      ...(from ? { startDate: { gte: new Date(String(from)) } } : {}),
-      ...(to ? { endDate: { lte: new Date(String(to)) } } : {}),
-    },
-    include: {
-      requester: {
-        select: {
-          name: true,
-          role: true,
-          studentProfile: { select: { rollNo: true, class: { select: { id: true, number: true, section: true } } } },
+      include: {
+        requester: {
+          select: {
+            name: true,
+            role: true,
+            studentProfile: { select: { rollNo: true, class: { select: { id: true, number: true, section: true } } } },
+          },
         },
       },
-    },
-    orderBy: { createdAt: 'desc' },
-  });
+      orderBy: { createdAt: 'desc' },
+    });
+  } catch (err) {
+    console.error('[getAdminLeaveRequests] Query failed', { schoolId, status, classId, from, to, err });
+    send(res, 500, undefined, 'Failed to load leave requests. Please try again.');
+    return;
+  }
 
   send(res, 200, {
     requests: requests.map((r) => ({
