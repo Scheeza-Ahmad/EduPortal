@@ -26,8 +26,12 @@ import {
 
 interface ClassOption {
   id: string;
-  name: string;
+  number: number;
   section: string;
+}
+
+function classOptionLabel(c: ClassOption): string {
+  return `Class ${c.number} - ${c.section}`;
 }
 
 interface Announcement {
@@ -142,7 +146,7 @@ export default function AnnouncementsPage() {
   function classLabel(classId: string | null): string {
     if (!classId) return 'School-wide';
     const match = classes.find((c) => c.id === classId);
-    return match ? `${match.name} ${match.section}` : 'Class';
+    return match ? classOptionLabel(match) : 'Class';
   }
 
   return (
@@ -158,7 +162,7 @@ export default function AnnouncementsPage() {
               <SelectItem value="all">All announcements</SelectItem>
               {classes.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
-                  {c.name} {c.section}
+                  {classOptionLabel(c)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -253,7 +257,7 @@ export default function AnnouncementsPage() {
                   <SelectItem value="school-wide">School-wide</SelectItem>
                   {classes.map((c) => (
                     <SelectItem key={c.id} value={c.id}>
-                      {c.name} {c.section}
+                      {classOptionLabel(c)}
                     </SelectItem>
                   ))}
                 </SelectContent>

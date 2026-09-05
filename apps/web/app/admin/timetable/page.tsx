@@ -32,8 +32,12 @@ import {
 
 interface ClassOption {
   id: string;
-  name: string;
+  number: number;
   section: string;
+}
+
+function classLabel(c: ClassOption): string {
+  return `Class ${c.number} - ${c.section}`;
 }
 
 interface SubjectOption {
@@ -192,7 +196,7 @@ export default function TimetablePage() {
             <SelectContent>
               {classes.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
-                  {c.name} {c.section}
+                  {classLabel(c)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -206,15 +210,16 @@ export default function TimetablePage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">
-            {classes.find((c) => c.id === selectedClassId)
-              ? `${classes.find((c) => c.id === selectedClassId)!.name} ${classes.find((c) => c.id === selectedClassId)!.section} — Weekly Schedule`
-              : 'Weekly Schedule'}
+            {(() => {
+              const selectedClass = classes.find((c) => c.id === selectedClassId);
+              return selectedClass ? `${classLabel(selectedClass)} — Weekly Schedule` : 'Select a class';
+            })()}
           </CardTitle>
         </CardHeader>
         <CardContent>
           {!selectedClassId ? (
             <p className="text-sm text-muted-foreground">
-              Create a class first on the Classes page.
+              Create a class first on the Students & Classes page.
             </p>
           ) : loading ? (
             <p className="text-sm text-muted-foreground">Loading timetable...</p>
@@ -280,6 +285,15 @@ export default function TimetablePage() {
           </DialogHeader>
 
           <form onSubmit={handleSubmit} className="space-y-4">
+            {(() => {
+              const selectedClass = classes.find((c) => c.id === selectedClassId);
+              return selectedClass ? (
+                <p className="text-sm text-muted-foreground">
+                  Class: <span className="font-medium text-foreground">{classLabel(selectedClass)}</span>
+                </p>
+              ) : null;
+            })()}
+
             <div className="space-y-2">
               <Label>Subject</Label>
               <Select

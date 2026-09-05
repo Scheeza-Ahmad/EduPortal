@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent } from '@/components/ui/card';
+import { ErrorState } from '@/components/shared/ErrorState';
 import {
   Table,
   TableBody,
@@ -78,8 +79,8 @@ export default function AdminLeaveRequestsPage() {
         { params }
       );
       setRequests(res.data.data.requests);
-    } catch {
-      setError('Failed to load leave requests.');
+    } catch (err) {
+      setError(getErrorMessage(err, 'Failed to load leave requests.'));
     } finally {
       setLoading(false);
     }
@@ -146,7 +147,7 @@ export default function AdminLeaveRequestsPage() {
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading...</p>
       ) : error ? (
-        <p className="text-sm text-destructive">{error}</p>
+        <ErrorState message={error} onRetry={loadRequests} />
       ) : requests.length === 0 ? (
         <Card>
           <CardContent className="pt-6 text-center text-sm text-muted-foreground">

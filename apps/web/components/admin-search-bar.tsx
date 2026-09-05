@@ -103,7 +103,7 @@ export function AdminSearchBar() {
                     <button
                       key={s.id}
                       className="block w-full rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted"
-                      onClick={() => goTo('/admin/students')}
+                      onClick={() => goTo('/admin/students-classes')}
                     >
                       {s.name}
                       <span className="text-muted-foreground">
@@ -138,7 +138,7 @@ export function AdminSearchBar() {
                     <button
                       key={c.id}
                       className="block w-full rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted"
-                      onClick={() => goTo('/admin/classes')}
+                      onClick={() => goTo('/admin/students-classes')}
                     >
                       {c.label}
                       <span className="text-muted-foreground"> — {c.studentCount} students</span>

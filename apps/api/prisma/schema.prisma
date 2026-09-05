@@ -185,6 +185,7 @@ model Class {
   section        String // "A" | "B" | "C"
   wing           Wing // auto-assigned from number: 1-5 -> junior, 6-10 -> senior
   classTeacherId String? // one class teacher per section
+  maxStudents    Int     @default(30)
   isActive       Boolean @default(true)
 
   createdAt DateTime @default(now())

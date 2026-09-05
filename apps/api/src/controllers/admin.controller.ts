@@ -184,9 +184,16 @@ export async function createStudent(req: AuthRequest, res: Response): Promise<vo
   const { name, email, password, classId, rollNo, dob, phone, address, parentName, parentEmail } =
     parsed.data;
 
-  const targetClass = await prisma.class.findFirst({ where: { id: classId, schoolId } });
+  const targetClass = await prisma.class.findFirst({
+    where: { id: classId, schoolId },
+    include: { _count: { select: { studentProfiles: true } } },
+  });
   if (!targetClass) {
     send(res, 400, undefined, 'Class not found in this school');
+    return;
+  }
+  if (targetClass._count.studentProfiles >= targetClass.maxStudents) {
+    send(res, 400, undefined, `Section is full. Maximum ${targetClass.maxStudents} students allowed.`);
     return;
   }
 
@@ -337,10 +344,17 @@ export async function updateStudent(req: AuthRequest, res: Response): Promise<vo
 
   const { name, email, classId, rollNo, dob, phone, address } = parsed.data;
 
-  if (classId) {
-    const targetClass = await prisma.class.findFirst({ where: { id: classId, schoolId } });
+  if (classId && classId !== existing.studentProfile?.classId) {
+    const targetClass = await prisma.class.findFirst({
+      where: { id: classId, schoolId },
+      include: { _count: { select: { studentProfiles: true } } },
+    });
     if (!targetClass) {
       send(res, 400, undefined, 'Class not found in this school');
+      return;
+    }
+    if (targetClass._count.studentProfiles >= targetClass.maxStudents) {
+      send(res, 400, undefined, `Section is full. Maximum ${targetClass.maxStudents} students allowed.`);
       return;
     }
   }
@@ -451,8 +465,13 @@ export async function bulkImportStudents(req: AuthRequest, res: Response): Promi
     return;
   }
 
-  const schoolClasses = await prisma.class.findMany({ where: { schoolId }, select: { id: true } });
-  const validClassIds = new Set(schoolClasses.map((c) => c.id));
+  const schoolClasses = await prisma.class.findMany({
+    where: { schoolId },
+    select: { id: true, maxStudents: true, _count: { select: { studentProfiles: true } } },
+  });
+  const classCapacity = new Map(
+    schoolClasses.map((c) => [c.id, { max: c.maxStudents, filled: c._count.studentProfiles }])
+  );
 
   const created: string[] = [];
   const errors: { row: number; email: string; error: string }[] = [];
@@ -465,8 +484,13 @@ export async function bulkImportStudents(req: AuthRequest, res: Response): Promi
       errors.push({ row: i + 2, email: email ?? '', error: 'Missing required field' });
       continue;
     }
-    if (!validClassIds.has(classId)) {
+    const capacity = classCapacity.get(classId);
+    if (!capacity) {
       errors.push({ row: i + 2, email, error: 'classId not found in this school' });
+      continue;
+    }
+    if (capacity.filled >= capacity.max) {
+      errors.push({ row: i + 2, email, error: `Section full (max ${capacity.max} students)` });
       continue;
     }
 
@@ -491,6 +515,7 @@ export async function bulkImportStudents(req: AuthRequest, res: Response): Promi
         },
       });
       created.push(user.id);
+      capacity.filled += 1;
     } catch (err) {
       errors.push({
         row: i + 2,
@@ -751,6 +776,7 @@ const updateClassSchema = z.object({
   number: z.number().int().min(1).max(10).optional(),
   section: z.string().min(1).optional(),
   classTeacherId: z.string().nullable().optional(),
+  maxStudents: z.number().int().min(1).max(60).optional(),
 });
 
 export async function updateClass(req: AuthRequest, res: Response): Promise<void> {
@@ -764,18 +790,32 @@ export async function updateClass(req: AuthRequest, res: Response): Promise<void
   }
 
   const { id } = req.params;
-  const existing = await prisma.class.findFirst({ where: { id, schoolId } });
+  const existing = await prisma.class.findFirst({
+    where: { id, schoolId },
+    include: { _count: { select: { studentProfiles: true } } },
+  });
   if (!existing) {
     send(res, 404, undefined, 'Class not found');
     return;
   }
 
-  const { number, section, classTeacherId } = parsed.data;
+  const { number, section, classTeacherId, maxStudents } = parsed.data;
+
+  if (maxStudents !== undefined && maxStudents < existing._count.studentProfiles) {
+    send(
+      res,
+      400,
+      undefined,
+      `Cannot set max students below the current enrollment (${existing._count.studentProfiles} students).`
+    );
+    return;
+  }
+
   const wing = number !== undefined ? wingForClassNumber(number) : undefined;
 
   const updated = await prisma.class.update({
     where: { id },
-    data: { number, section, wing, classTeacherId },
+    data: { number, section, wing, classTeacherId, maxStudents },
   });
 
   await auditLog({

@@ -16,10 +16,9 @@ import { AdminSearchBar } from '@/components/admin-search-bar';
 
 const NAV_ITEMS = [
   { href: '/admin', key: 'dashboard' as const },
-  { href: '/admin/students', key: 'students' as const },
   { href: '/admin/teachers', key: 'teachers' as const },
+  { href: '/admin/students-classes', key: 'studentsAndClasses' as const },
   { href: '/admin/coordinators', key: 'coordinators' as const },
-  { href: '/admin/classes', key: 'classes' as const },
   { href: '/admin/subjects', key: 'subjects' as const },
   { href: '/admin/timetable', key: 'timetable' as const },
   { href: '/admin/announcements', key: 'announcements' as const },

@@ -8,6 +8,7 @@ export const translations = {
   teachers: { en: 'Teachers', ur: 'اساتذہ' },
   coordinators: { en: 'Coordinators', ur: 'کوآرڈینیٹرز' },
   classes: { en: 'Classes', ur: 'کلاسز' },
+  studentsAndClasses: { en: 'Students & Classes', ur: 'طلباء اور کلاسز' },
   subjects: { en: 'Subjects', ur: 'مضامین' },
   timetable: { en: 'Timetable', ur: 'ٹائم ٹیبل' },
   attendance: { en: 'Attendance', ur: 'حاضری' },
