@@ -130,9 +130,32 @@ export async function login(req: Request, res: Response): Promise<void> {
 
   await issueRefreshToken(user.id, res);
 
+  // Best-effort — a branding lookup failure shouldn't block login.
+  let branding = null;
+  if (user.schoolId) {
+    try {
+      branding = await prisma.schoolSettings.findUnique({
+        where: { schoolId: user.schoolId },
+        select: {
+          portalName: true,
+          logoUrl: true,
+          primaryColor: true,
+          sidebarColor: true,
+          accentColor: true,
+          fontFamily: true,
+          loginBgColor: true,
+          loginMessage: true,
+        },
+      });
+    } catch (err) {
+      console.error('[login] Failed to load school branding', { schoolId: user.schoolId, err });
+    }
+  }
+
   send(res, 200, {
     accessToken,
-    user: { id: user.id, name: user.name, role: user.role },
+    user: { id: user.id, name: user.name, role: user.role, schoolId: user.schoolId },
+    branding: branding ?? null,
   });
 }
 

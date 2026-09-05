@@ -10,6 +10,7 @@ import { useAuthStore } from '@/lib/store';
 import { useLanguage } from '@/lib/LanguageContext';
 import { t } from '@/lib/translations';
 import { LogoutButton } from '@/components/logout-button';
+import { useBranding } from '@/lib/BrandingContext';
 import { Badge } from '@/components/ui/badge';
 import { PortalToggles } from '@/components/portal-toggles';
 import { AdminSearchBar } from '@/components/admin-search-bar';
@@ -28,6 +29,7 @@ const NAV_ITEMS = [
   { href: '/admin/consent-forms', key: 'consentForms' as const },
   { href: '/admin/at-risk', key: 'atRiskStudents' as const, icon: '⚠️' },
   { href: '/admin/finance-officer', key: 'financeOfficer' as const },
+  { href: '/admin/school-settings', key: 'schoolSettings' as const },
 ];
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
@@ -35,6 +37,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { accessToken, user, setAuth, clearAuth } = useAuthStore();
   const { language } = useLanguage();
+  const { branding } = useBranding();
   const [checkingSession, setCheckingSession] = useState(true);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -115,12 +118,18 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
 
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 w-64 shrink-0 -translate-x-full border-r border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900 transition-transform duration-200 lg:static lg:w-56 lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-50 w-64 shrink-0 -translate-x-full border-r border-gray-200 p-4 dark:border-gray-700 transition-transform duration-200 lg:static lg:w-56 lg:translate-x-0',
+          !branding.sidebarColor && 'bg-white dark:bg-gray-900',
           mobileNavOpen && 'translate-x-0'
         )}
+        style={branding.sidebarColor ? { backgroundColor: branding.sidebarColor } : undefined}
       >
         <div className="mb-6 flex items-center justify-between px-2">
-          <span className="text-lg font-semibold">EduPortal</span>
+          {branding.logoUrl ? (
+            <img src={branding.logoUrl} alt={branding.portalName} className="h-8 w-auto object-contain" />
+          ) : (
+            <span className="text-lg font-semibold">{branding.portalName}</span>
+          )}
           <button className="lg:hidden" onClick={() => setMobileNavOpen(false)} aria-label="Close menu">
             <X className="h-5 w-5" />
           </button>
@@ -147,9 +156,10 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
                 className={cn(
                   'flex items-center justify-between rounded-md px-3 py-2 text-sm font-medium transition-colors',
                   isActive
-                    ? 'bg-primary text-primary-foreground'
+                    ? 'text-white'
                     : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 )}
+                style={isActive ? { backgroundColor: branding.primaryColor } : undefined}
               >
                 <span>
                   {item.icon ? `${item.icon} ` : ''}

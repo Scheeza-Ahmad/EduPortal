@@ -498,6 +498,17 @@ model SchoolSettings {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
+  // White-labeling / branding
+  portalName   String?
+  logoUrl      String?
+  primaryColor String  @default("#1a56db")
+  sidebarColor String?
+  accentColor  String  @default("#f97316")
+  fontFamily   String  @default("Inter")
+  loginBgColor String  @default("#ffffff")
+  loginMessage String?
+  faviconUrl   String?
+
   school School @relation(fields: [schoolId], references: [id])
 }
 

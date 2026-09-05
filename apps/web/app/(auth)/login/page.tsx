@@ -10,10 +10,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
+import { Branding, defaultBranding, useBranding } from '@/lib/BrandingContext';
 
 interface LoginResponse {
   accessToken: string;
-  user: { id: string; name: string; role: string };
+  user: { id: string; name: string; role: string; schoolId: string | null };
+  branding: Branding | null;
 }
 
 const ROLE_HOME: Record<string, string> = {
@@ -128,6 +130,11 @@ function getErrorMessage(err: unknown, fallback: string): string {
 export default function LoginPage() {
   const router = useRouter();
   const setAuth = useAuthStore((state) => state.setAuth);
+  const { branding, setBranding } = useBranding();
+  // A school's branding only exists once someone from that school has ever
+  // logged in on this browser (it's stored from the previous login) — until
+  // then this page has no school context to show, so it stays generic.
+  const hasCustomBranding = branding.portalName !== defaultBranding.portalName;
 
   const [step, setStep] = useState<Step>('role-select');
   const [selectedRole, setSelectedRole] = useState<RoleInfo>(ROLES[1]);
@@ -174,9 +181,26 @@ export default function LoginPage() {
         '/api/auth/login',
         { email, password }
       );
-      const { accessToken, user } = res.data.data;
+      const { accessToken, user, branding: loginBranding } = res.data.data;
       setAuth(accessToken, user);
       const destination = ROLE_HOME[user.role] ?? '/login';
+
+      // Super admin is the platform operator, not tied to any one school —
+      // it always sees the plain default branding, never a leftover school's.
+      if (user.role === 'super_admin') {
+        setBranding(defaultBranding);
+      } else if (loginBranding) {
+        setBranding({
+          portalName: loginBranding.portalName || defaultBranding.portalName,
+          logoUrl: loginBranding.logoUrl,
+          primaryColor: loginBranding.primaryColor || defaultBranding.primaryColor,
+          sidebarColor: loginBranding.sidebarColor,
+          accentColor: loginBranding.accentColor || defaultBranding.accentColor,
+          fontFamily: loginBranding.fontFamily || defaultBranding.fontFamily,
+          loginBgColor: loginBranding.loginBgColor || defaultBranding.loginBgColor,
+          loginMessage: loginBranding.loginMessage,
+        });
+      }
 
       // The role picked in Step 1 is purely for theming — the backend's
       // actual role from the credentials decides where the user lands. If
@@ -260,7 +284,31 @@ export default function LoginPage() {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-background px-6 py-12">
         <div className="w-full max-w-3xl text-center">
-          <h1 className="text-3xl font-semibold tracking-tight">Welcome to EduPortal</h1>
+          {hasCustomBranding && (
+            <div
+              className="mx-auto mb-8 max-w-sm rounded-xl border-t-4 bg-card px-6 py-5 shadow-sm"
+              style={{ borderTopColor: branding.primaryColor }}
+            >
+              {branding.logoUrl ? (
+                <img
+                  src={branding.logoUrl}
+                  alt={branding.portalName}
+                  className="mx-auto mb-2 h-12 w-auto object-contain"
+                />
+              ) : (
+                <p className="text-lg font-semibold" style={{ color: branding.primaryColor }}>
+                  {branding.portalName}
+                </p>
+              )}
+              {branding.loginMessage && (
+                <p className="mt-1 text-sm text-muted-foreground">{branding.loginMessage}</p>
+              )}
+            </div>
+          )}
+
+          <h1 className="text-3xl font-semibold tracking-tight">
+            Welcome to {hasCustomBranding ? branding.portalName : 'EduPortal'}
+          </h1>
           <p className="mt-2 text-sm text-muted-foreground">Select your role to continue</p>
 
           <div className="mt-10 grid grid-cols-2 gap-4 sm:grid-cols-3">

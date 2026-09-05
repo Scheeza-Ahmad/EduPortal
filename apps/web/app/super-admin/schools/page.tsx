@@ -37,6 +37,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { BrandingEditor, BrandingFormData, EMPTY_BRANDING_FORM } from '@/components/branding/BrandingEditor';
 
 interface School {
   id: string;
@@ -112,6 +113,11 @@ export default function SchoolsPage() {
   const [selectedUserId, setSelectedUserId] = useState<string>('');
   const [assignExistingError, setAssignExistingError] = useState<string | null>(null);
   const [assignExistingSubmitting, setAssignExistingSubmitting] = useState(false);
+
+  const [brandingDialogOpen, setBrandingDialogOpen] = useState(false);
+  const [brandingSchool, setBrandingSchool] = useState<School | null>(null);
+  const [brandingInitial, setBrandingInitial] = useState<BrandingFormData>(EMPTY_BRANDING_FORM);
+  const [brandingLoading, setBrandingLoading] = useState(false);
 
   async function loadSchools() {
     setLoading(true);
@@ -260,6 +266,57 @@ export default function SchoolsPage() {
     }
   }
 
+  async function openBrandingDialog(school: School) {
+    setBrandingSchool(school);
+    setBrandingInitial(EMPTY_BRANDING_FORM);
+    setBrandingDialogOpen(true);
+    setBrandingLoading(true);
+    try {
+      const res = await api.get<{
+        success: boolean;
+        data: Partial<{
+          portalName: string;
+          loginMessage: string | null;
+          logoUrl: string | null;
+          primaryColor: string;
+          accentColor: string;
+          sidebarColor: string | null;
+          loginBgColor: string;
+          fontFamily: string;
+        }>;
+      }>(`/api/super/schools/${school.id}/branding`);
+      const b = res.data.data;
+      setBrandingInitial({
+        portalName: b.portalName || school.name,
+        loginMessage: b.loginMessage ?? '',
+        logoUrl: b.logoUrl ?? '',
+        primaryColor: b.primaryColor || EMPTY_BRANDING_FORM.primaryColor,
+        accentColor: b.accentColor || EMPTY_BRANDING_FORM.accentColor,
+        sidebarColor: b.sidebarColor ?? '',
+        loginBgColor: b.loginBgColor || EMPTY_BRANDING_FORM.loginBgColor,
+        fontFamily: b.fontFamily || EMPTY_BRANDING_FORM.fontFamily,
+      });
+    } catch {
+      setBrandingInitial({ ...EMPTY_BRANDING_FORM, portalName: school.name });
+    } finally {
+      setBrandingLoading(false);
+    }
+  }
+
+  async function handleSaveBranding(data: BrandingFormData) {
+    if (!brandingSchool) return;
+    await api.patch(`/api/super/schools/${brandingSchool.id}/branding`, {
+      portalName: data.portalName || undefined,
+      loginMessage: data.loginMessage || null,
+      logoUrl: data.logoUrl || null,
+      primaryColor: data.primaryColor,
+      accentColor: data.accentColor,
+      sidebarColor: data.sidebarColor || null,
+      loginBgColor: data.loginBgColor,
+      fontFamily: data.fontFamily,
+    });
+  }
+
   function activeFeatures(school: School): string[] {
     const features: string[] = [];
     if (school.featureParentPortal) features.push('Parent Portal');
@@ -337,6 +394,9 @@ export default function SchoolsPage() {
                       <TableCell className="text-right space-x-2">
                         <Button variant="outline" size="sm" onClick={() => openEditDialog(school)}>
                           Edit
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => openBrandingDialog(school)}>
+                          🎨 Customize
                         </Button>
                         <Button
                           variant={school.admin ? 'outline' : 'default'}
@@ -579,6 +639,44 @@ export default function SchoolsPage() {
               </form>
             </TabsContent>
           </Tabs>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={brandingDialogOpen} onOpenChange={setBrandingDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          {brandingLoading ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">Loading branding...</p>
+          ) : (
+            <BrandingEditor
+              title={`School Branding — ${brandingSchool?.name ?? ''}`}
+              initial={brandingInitial}
+              onSave={handleSaveBranding}
+              onPreviewPortal={(draft) => {
+                // A lightweight but functionally real preview: stash the
+                // in-progress draft where the login page already knows to
+                // look (the same key BrandingProvider persists to), then
+                // open it in a new tab so nothing here is disturbed.
+                try {
+                  localStorage.setItem(
+                    'school_branding',
+                    JSON.stringify({
+                      portalName: draft.portalName || brandingSchool?.name || 'EduPortal',
+                      logoUrl: draft.logoUrl || null,
+                      primaryColor: draft.primaryColor,
+                      sidebarColor: draft.sidebarColor || null,
+                      accentColor: draft.accentColor,
+                      fontFamily: draft.fontFamily,
+                      loginBgColor: draft.loginBgColor,
+                      loginMessage: draft.loginMessage || null,
+                    })
+                  );
+                } catch {
+                  // ignore — preview just won't be pre-populated
+                }
+                window.open('/login', '_blank', 'noopener,noreferrer');
+              }}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </div>

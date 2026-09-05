@@ -2593,3 +2593,75 @@ export async function globalSearch(req: AuthRequest, res: Response): Promise<voi
     })),
   });
 }
+
+// ---------------------------------------------------------------
+// GET /api/admin/school-settings/branding
+// PATCH /api/admin/school-settings/branding
+// School admin refining their own school's branding, initially set by
+// super admin — same fields, same shape as the super-admin endpoint.
+// ---------------------------------------------------------------
+
+const adminBrandingSelect = {
+  portalName: true,
+  logoUrl: true,
+  primaryColor: true,
+  sidebarColor: true,
+  accentColor: true,
+  fontFamily: true,
+  loginBgColor: true,
+  loginMessage: true,
+  faviconUrl: true,
+} as const;
+
+export async function getSchoolBrandingSelf(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const settings = await prisma.schoolSettings.findUnique({
+    where: { schoolId },
+    select: adminBrandingSelect,
+  });
+
+  send(res, 200, settings ?? {});
+}
+
+const adminBrandingSchema = z.object({
+  portalName: z.string().max(100).optional(),
+  primaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  sidebarColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional(),
+  accentColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  fontFamily: z.string().max(50).optional(),
+  loginBgColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  loginMessage: z.string().max(300).nullable().optional(),
+  logoUrl: z.string().url().nullable().optional(),
+  faviconUrl: z.string().url().nullable().optional(),
+});
+
+export async function updateSchoolBrandingSelf(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = adminBrandingSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid branding data');
+    return;
+  }
+
+  const settings = await prisma.schoolSettings.upsert({
+    where: { schoolId },
+    create: { schoolId, ...parsed.data },
+    update: parsed.data,
+    select: adminBrandingSelect,
+  });
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'SCHOOL_BRANDING_UPDATED',
+    targetTable: 'SchoolSettings',
+    targetId: schoolId,
+    meta: parsed.data,
+    ip: req.ip,
+  });
+
+  send(res, 200, settings);
+}

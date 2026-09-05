@@ -8,6 +8,7 @@ import {
   deleteSchool,
   getAnalytics,
   getAuditLogs,
+  getSchoolBranding,
   getSchools,
   getStats,
   getUsers,
@@ -15,6 +16,7 @@ import {
   toggleFeatures,
   triggerBackup,
   updateSchool,
+  updateSchoolBranding,
 } from '../controllers/super.controller';
 
 const router = Router();
@@ -33,6 +35,8 @@ router.delete('/schools/:id', deleteSchool);
 router.patch('/schools/:id/admin', assignAdmin);
 router.post('/schools/:id/admin/create', createSchoolAdmin);
 router.patch('/schools/:id/features', toggleFeatures);
+router.get('/schools/:id/branding', getSchoolBranding);
+router.patch('/schools/:id/branding', updateSchoolBranding);
 
 router.get('/audit-logs', getAuditLogs);
 

@@ -38,6 +38,7 @@ import {
   globalSearch,
   getParents,
   getReportCard,
+  getSchoolBrandingSelf,
   getStats,
   getStatsTrend,
   getStudents,
@@ -52,6 +53,7 @@ import {
   reviewAdminLeaveRequest,
   updateClass,
   updateFinanceUser,
+  updateSchoolBrandingSelf,
   updateStudent,
   updateSubject,
   updateTeacher,
@@ -149,5 +151,9 @@ router.get('/consent-forms/:id/responses', getConsentFormResponses);
 // AI / analytics
 router.get('/at-risk-students', getAtRiskStudents);
 router.get('/search', globalSearch);
+
+// School branding — refines what super admin initially set
+router.get('/school-settings/branding', getSchoolBrandingSelf);
+router.patch('/school-settings/branding', updateSchoolBrandingSelf);
 
 export default router;

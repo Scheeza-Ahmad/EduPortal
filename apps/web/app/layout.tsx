@@ -3,6 +3,7 @@ import { Inter, Noto_Nastaliq_Urdu } from 'next/font/google';
 import './globals.css';
 import { ThemeProvider } from '@/components/theme-provider';
 import { LanguageProvider } from '@/lib/LanguageContext';
+import { BrandingProvider } from '@/lib/BrandingContext';
 import { KeepAlive } from '@/components/keep-alive';
 
 const inter = Inter({ subsets: ['latin'] });
@@ -21,12 +22,14 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${inter.className} ${notoNastaliqUrdu.variable}`}>
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-          <LanguageProvider>
-            <KeepAlive />
-            {children}
-          </LanguageProvider>
-        </ThemeProvider>
+        <BrandingProvider>
+          <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+            <LanguageProvider>
+              <KeepAlive />
+              {children}
+            </LanguageProvider>
+          </ThemeProvider>
+        </BrandingProvider>
       </body>
     </html>
   );
