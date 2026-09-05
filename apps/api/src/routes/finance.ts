@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { verifyToken } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
+import { requireFeature } from '../middleware/featureCheck';
 import {
   applyDiscount,
   createDiscountPolicy,
@@ -33,7 +34,7 @@ const router = Router();
 // The Finance module is fully separate from the admin panel now — school_admin
 // only creates finance-officer accounts (POST /api/admin/finance/create-user),
 // they don't get into finance data/operations themselves.
-router.use(verifyToken, requireRole('finance'));
+router.use(verifyToken, requireRole('finance'), requireFeature('featureFinance'));
 
 router.get('/school-info', getSchoolInfo);
 

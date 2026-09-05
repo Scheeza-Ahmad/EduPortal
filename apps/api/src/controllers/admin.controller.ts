@@ -2665,3 +2665,38 @@ export async function updateSchoolBrandingSelf(req: AuthRequest, res: Response):
 
   send(res, 200, settings);
 }
+
+// ---------------------------------------------------------------
+// GET /api/admin/school-settings/features
+// Read-only — school admin can see what's enabled but only super admin can
+// change it (via /api/super/schools/:id/features).
+// ---------------------------------------------------------------
+
+export async function getSchoolFeaturesSelf(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const school = await prisma.school.findUnique({
+    where: { id: schoolId },
+    select: {
+      featureParentPortal: true,
+      featureAi: true,
+      featureSms: true,
+      featureUrdu: true,
+      featureCoordinator: true,
+      featureLeaveRequests: true,
+      featureConsentForms: true,
+      featureFinance: true,
+      featureAiInsights: true,
+      featureAttendance: true,
+      featureTimetable: true,
+      featureAnnouncements: true,
+      featureCalendar: true,
+      featureReportCards: true,
+      featureBadges: true,
+      featureMonthlyReports: true,
+    },
+  });
+
+  send(res, 200, school ?? {});
+}

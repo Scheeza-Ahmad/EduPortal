@@ -1,9 +1,11 @@
 import type { Metadata } from 'next';
 import { Inter, Noto_Nastaliq_Urdu } from 'next/font/google';
 import './globals.css';
+import { Toaster } from 'sonner';
 import { ThemeProvider } from '@/components/theme-provider';
 import { LanguageProvider } from '@/lib/LanguageContext';
 import { BrandingProvider } from '@/lib/BrandingContext';
+import { FeaturesProvider } from '@/lib/FeaturesContext';
 import { KeepAlive } from '@/components/keep-alive';
 
 const inter = Inter({ subsets: ['latin'] });
@@ -23,12 +25,15 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className={`${inter.className} ${notoNastaliqUrdu.variable}`}>
         <BrandingProvider>
-          <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-            <LanguageProvider>
-              <KeepAlive />
-              {children}
-            </LanguageProvider>
-          </ThemeProvider>
+          <FeaturesProvider>
+            <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+              <LanguageProvider>
+                <KeepAlive />
+                {children}
+                <Toaster richColors position="top-right" />
+              </LanguageProvider>
+            </ThemeProvider>
+          </FeaturesProvider>
         </BrandingProvider>
       </body>
     </html>

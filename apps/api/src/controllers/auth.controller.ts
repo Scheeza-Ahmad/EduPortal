@@ -152,10 +152,41 @@ export async function login(req: Request, res: Response): Promise<void> {
     }
   }
 
+  // Best-effort — a feature-flag lookup failure shouldn't block login either.
+  let features = null;
+  if (user.schoolId) {
+    try {
+      features = await prisma.school.findUnique({
+        where: { id: user.schoolId },
+        select: {
+          featureParentPortal: true,
+          featureAi: true,
+          featureSms: true,
+          featureUrdu: true,
+          featureCoordinator: true,
+          featureLeaveRequests: true,
+          featureConsentForms: true,
+          featureFinance: true,
+          featureAiInsights: true,
+          featureAttendance: true,
+          featureTimetable: true,
+          featureAnnouncements: true,
+          featureCalendar: true,
+          featureReportCards: true,
+          featureBadges: true,
+          featureMonthlyReports: true,
+        },
+      });
+    } catch (err) {
+      console.error('[login] Failed to load school features', { schoolId: user.schoolId, err });
+    }
+  }
+
   send(res, 200, {
     accessToken,
     user: { id: user.id, name: user.name, role: user.role, schoolId: user.schoolId },
     branding: branding ?? null,
+    features: features ?? null,
   });
 }
 

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { verifyToken } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
+import { requireFeature } from '../middleware/featureCheck';
 import {
   createLeaveRequest,
   getActivities,
@@ -34,20 +35,20 @@ router.post('/submit/:activityId', submitActivity);
 router.get('/submissions', getSubmissions);
 
 router.get('/grades', getGrades);
-router.get('/grade-card', getGradeCard);
+router.get('/grade-card', requireFeature('featureReportCards'), getGradeCard);
 
-router.get('/attendance', getAttendance);
+router.get('/attendance', requireFeature('featureAttendance'), getAttendance);
 
 router.get('/notifications', getNotifications);
 router.patch('/notifications/:id/read', markNotificationRead);
 
-router.get('/badges', getBadges);
+router.get('/badges', requireFeature('featureBadges'), getBadges);
 
-router.get('/fees', getMyFees);
+router.get('/fees', requireFeature('featureFinance'), getMyFees);
 
-router.post('/leave-request', createLeaveRequest);
-router.get('/leave-requests', getMyLeaveRequests);
+router.post('/leave-request', requireFeature('featureLeaveRequests'), createLeaveRequest);
+router.get('/leave-requests', requireFeature('featureLeaveRequests'), getMyLeaveRequests);
 
-router.get('/ai-insights', getAiInsights);
+router.get('/ai-insights', requireFeature('featureAiInsights'), getAiInsights);
 
 export default router;

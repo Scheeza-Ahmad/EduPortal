@@ -11,22 +11,15 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 import { Branding, defaultBranding, useBranding } from '@/lib/BrandingContext';
+import { defaultFeatures, SchoolFeatures, useFeatures } from '@/lib/FeaturesContext';
+import { ROLE_HOME } from '@/lib/roleHome';
 
 interface LoginResponse {
   accessToken: string;
   user: { id: string; name: string; role: string; schoolId: string | null };
   branding: Branding | null;
+  features: Partial<SchoolFeatures> | null;
 }
-
-const ROLE_HOME: Record<string, string> = {
-  super_admin: '/super-admin',
-  school_admin: '/admin',
-  teacher: '/teacher',
-  student: '/student',
-  parent: '/parent',
-  finance: '/finance',
-  coordinator: '/coordinator',
-};
 
 type RoleValue = keyof typeof ROLE_HOME;
 type ColorName = 'purple' | 'blue' | 'green' | 'indigo' | 'orange' | 'yellow' | 'pink';
@@ -127,14 +120,16 @@ function getErrorMessage(err: unknown, fallback: string): string {
   return axiosErr.response?.data?.error ?? fallback;
 }
 
+// The visible role-select grid excludes Super Admin — platform admin access
+// is reached through the subtle "Platform admin?" link at the bottom instead,
+// so the login screen doesn't advertise it to ordinary school staff.
+const VISIBLE_ROLES = ROLES.filter((r) => r.value !== 'super_admin');
+
 export default function LoginPage() {
   const router = useRouter();
   const setAuth = useAuthStore((state) => state.setAuth);
-  const { branding, setBranding } = useBranding();
-  // A school's branding only exists once someone from that school has ever
-  // logged in on this browser (it's stored from the previous login) — until
-  // then this page has no school context to show, so it stays generic.
-  const hasCustomBranding = branding.portalName !== defaultBranding.portalName;
+  const { setBranding } = useBranding();
+  const { setFeatures } = useFeatures();
 
   const [step, setStep] = useState<Step>('role-select');
   const [selectedRole, setSelectedRole] = useState<RoleInfo>(ROLES[1]);
@@ -181,7 +176,7 @@ export default function LoginPage() {
         '/api/auth/login',
         { email, password }
       );
-      const { accessToken, user, branding: loginBranding } = res.data.data;
+      const { accessToken, user, branding: loginBranding, features: loginFeatures } = res.data.data;
       setAuth(accessToken, user);
       const destination = ROLE_HOME[user.role] ?? '/login';
 
@@ -189,17 +184,23 @@ export default function LoginPage() {
       // it always sees the plain default branding, never a leftover school's.
       if (user.role === 'super_admin') {
         setBranding(defaultBranding);
-      } else if (loginBranding) {
-        setBranding({
-          portalName: loginBranding.portalName || defaultBranding.portalName,
-          logoUrl: loginBranding.logoUrl,
-          primaryColor: loginBranding.primaryColor || defaultBranding.primaryColor,
-          sidebarColor: loginBranding.sidebarColor,
-          accentColor: loginBranding.accentColor || defaultBranding.accentColor,
-          fontFamily: loginBranding.fontFamily || defaultBranding.fontFamily,
-          loginBgColor: loginBranding.loginBgColor || defaultBranding.loginBgColor,
-          loginMessage: loginBranding.loginMessage,
-        });
+        setFeatures(defaultFeatures);
+      } else {
+        if (loginBranding) {
+          setBranding({
+            portalName: loginBranding.portalName || defaultBranding.portalName,
+            logoUrl: loginBranding.logoUrl,
+            primaryColor: loginBranding.primaryColor || defaultBranding.primaryColor,
+            sidebarColor: loginBranding.sidebarColor,
+            accentColor: loginBranding.accentColor || defaultBranding.accentColor,
+            fontFamily: loginBranding.fontFamily || defaultBranding.fontFamily,
+            loginBgColor: loginBranding.loginBgColor || defaultBranding.loginBgColor,
+            loginMessage: loginBranding.loginMessage,
+          });
+        }
+        if (loginFeatures) {
+          setFeatures({ ...defaultFeatures, ...loginFeatures });
+        }
       }
 
       // The role picked in Step 1 is purely for theming — the backend's
@@ -284,35 +285,11 @@ export default function LoginPage() {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-background px-6 py-12">
         <div className="w-full max-w-3xl text-center">
-          {hasCustomBranding && (
-            <div
-              className="mx-auto mb-8 max-w-sm rounded-xl border-t-4 bg-card px-6 py-5 shadow-sm"
-              style={{ borderTopColor: branding.primaryColor }}
-            >
-              {branding.logoUrl ? (
-                <img
-                  src={branding.logoUrl}
-                  alt={branding.portalName}
-                  className="mx-auto mb-2 h-12 w-auto object-contain"
-                />
-              ) : (
-                <p className="text-lg font-semibold" style={{ color: branding.primaryColor }}>
-                  {branding.portalName}
-                </p>
-              )}
-              {branding.loginMessage && (
-                <p className="mt-1 text-sm text-muted-foreground">{branding.loginMessage}</p>
-              )}
-            </div>
-          )}
-
-          <h1 className="text-3xl font-semibold tracking-tight">
-            Welcome to {hasCustomBranding ? branding.portalName : 'EduPortal'}
-          </h1>
+          <h1 className="text-3xl font-semibold tracking-tight">Welcome to EduPortal</h1>
           <p className="mt-2 text-sm text-muted-foreground">Select your role to continue</p>
 
           <div className="mt-10 grid grid-cols-2 gap-4 sm:grid-cols-3">
-            {ROLES.map((role) => {
+            {VISIBLE_ROLES.map((role) => {
               const c = COLOR_STYLES[role.color];
               return (
                 <button
@@ -332,6 +309,14 @@ export default function LoginPage() {
               );
             })}
           </div>
+
+          <button
+            onClick={() => chooseRole(ROLES.find((r) => r.value === 'super_admin')!)}
+            className="mt-10 text-xs text-muted-foreground/70 transition-colors hover:text-muted-foreground"
+          >
+            School staff? Select your role above. Platform admin?{' '}
+            <span className="underline underline-offset-2">Click here</span>
+          </button>
         </div>
       </div>
     );

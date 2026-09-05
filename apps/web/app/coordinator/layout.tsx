@@ -8,19 +8,22 @@ import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import { useLanguage } from '@/lib/LanguageContext';
-import { t } from '@/lib/translations';
+import { t, TranslationKey } from '@/lib/translations';
 import { LogoutButton } from '@/components/logout-button';
 import { useBranding } from '@/lib/BrandingContext';
+import { WrongPortalAccess } from '@/components/wrong-portal';
+import { useFeatures } from '@/lib/FeaturesContext';
+import type { SchoolFeatures } from '@/lib/FeaturesContext';
 import { PortalToggles } from '@/components/portal-toggles';
 
-const NAV_ITEMS = [
-  { href: '/coordinator', key: 'dashboard' as const },
-  { href: '/coordinator/activities', key: 'activities' as const },
-  { href: '/coordinator/teachers', key: 'teachers' as const },
-  { href: '/coordinator/reports', key: 'reports' as const },
-  { href: '/coordinator/students', key: 'students' as const },
-  { href: '/coordinator/announcements', key: 'announcements' as const },
-  { href: '/coordinator/wing-report', key: 'wingReport' as const },
+const NAV_ITEMS: { href: string; key: TranslationKey; feature?: keyof SchoolFeatures }[] = [
+  { href: '/coordinator', key: 'dashboard' },
+  { href: '/coordinator/activities', key: 'activities' },
+  { href: '/coordinator/teachers', key: 'teachers' },
+  { href: '/coordinator/reports', key: 'reports', feature: 'featureMonthlyReports' },
+  { href: '/coordinator/students', key: 'students' },
+  { href: '/coordinator/announcements', key: 'announcements', feature: 'featureAnnouncements' },
+  { href: '/coordinator/wing-report', key: 'wingReport' },
 ];
 
 export default function CoordinatorLayout({ children }: { children: ReactNode }) {
@@ -29,9 +32,12 @@ export default function CoordinatorLayout({ children }: { children: ReactNode })
   const { accessToken, user, setAuth, clearAuth } = useAuthStore();
   const { language } = useLanguage();
   const { branding } = useBranding();
+  const { hasFeature } = useFeatures();
   const [checkingSession, setCheckingSession] = useState(true);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  const visibleNavItems = NAV_ITEMS.filter((item) => !item.feature || hasFeature(item.feature));
 
   useEffect(() => {
     setPendingHref(null);
@@ -68,12 +74,6 @@ export default function CoordinatorLayout({ children }: { children: ReactNode })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
 
-  useEffect(() => {
-    if (!checkingSession && user && user.role !== 'coordinator') {
-      router.replace('/login');
-    }
-  }, [checkingSession, user, router]);
-
   async function handleLogout() {
     try {
       await api.post('/api/auth/logout');
@@ -89,6 +89,10 @@ export default function CoordinatorLayout({ children }: { children: ReactNode })
         Loading...
       </div>
     );
+  }
+
+  if (user && !['coordinator'].includes(user.role)) {
+    return <WrongPortalAccess role={user.role} />;
   }
 
   return (
@@ -119,7 +123,7 @@ export default function CoordinatorLayout({ children }: { children: ReactNode })
           </button>
         </div>
         <nav className="space-y-1">
-          {NAV_ITEMS.map((item) => {
+          {visibleNavItems.map((item) => {
             const isActive = pendingHref
               ? pendingHref === item.href
               : item.href === '/coordinator'

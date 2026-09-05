@@ -8,28 +8,31 @@ import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import { useLanguage } from '@/lib/LanguageContext';
-import { t } from '@/lib/translations';
+import { t, TranslationKey } from '@/lib/translations';
 import { LogoutButton } from '@/components/logout-button';
 import { useBranding } from '@/lib/BrandingContext';
+import { WrongPortalAccess } from '@/components/wrong-portal';
+import { useFeatures } from '@/lib/FeaturesContext';
+import type { SchoolFeatures } from '@/lib/FeaturesContext';
 import { Badge } from '@/components/ui/badge';
 import { PortalToggles } from '@/components/portal-toggles';
 import { AdminSearchBar } from '@/components/admin-search-bar';
 
-const NAV_ITEMS = [
-  { href: '/admin', key: 'dashboard' as const },
-  { href: '/admin/teachers', key: 'teachers' as const },
-  { href: '/admin/students-classes', key: 'studentsAndClasses' as const },
-  { href: '/admin/coordinators', key: 'coordinators' as const },
-  { href: '/admin/subjects', key: 'subjects' as const },
-  { href: '/admin/timetable', key: 'timetable' as const },
-  { href: '/admin/announcements', key: 'announcements' as const },
-  { href: '/admin/report-cards', key: 'reportCards' as const },
-  { href: '/admin/calendar', key: 'calendar' as const },
-  { href: '/admin/leave-requests', key: 'leaveRequests' as const },
-  { href: '/admin/consent-forms', key: 'consentForms' as const },
-  { href: '/admin/at-risk', key: 'atRiskStudents' as const, icon: '⚠️' },
-  { href: '/admin/finance-officer', key: 'financeOfficer' as const },
-  { href: '/admin/school-settings', key: 'schoolSettings' as const },
+const NAV_ITEMS: { href: string; key: TranslationKey; icon?: string; feature?: keyof SchoolFeatures }[] = [
+  { href: '/admin', key: 'dashboard' },
+  { href: '/admin/teachers', key: 'teachers' },
+  { href: '/admin/students-classes', key: 'studentsAndClasses' },
+  { href: '/admin/coordinators', key: 'coordinators', feature: 'featureCoordinator' },
+  { href: '/admin/subjects', key: 'subjects' },
+  { href: '/admin/timetable', key: 'timetable', feature: 'featureTimetable' },
+  { href: '/admin/announcements', key: 'announcements', feature: 'featureAnnouncements' },
+  { href: '/admin/report-cards', key: 'reportCards', feature: 'featureReportCards' },
+  { href: '/admin/calendar', key: 'calendar', feature: 'featureCalendar' },
+  { href: '/admin/leave-requests', key: 'leaveRequests', feature: 'featureLeaveRequests' },
+  { href: '/admin/consent-forms', key: 'consentForms', feature: 'featureConsentForms' },
+  { href: '/admin/at-risk', key: 'atRiskStudents', icon: '⚠️', feature: 'featureAiInsights' },
+  { href: '/admin/finance-officer', key: 'financeOfficer', feature: 'featureFinance' },
+  { href: '/admin/school-settings', key: 'schoolSettings' },
 ];
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
@@ -38,10 +41,13 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   const { accessToken, user, setAuth, clearAuth } = useAuthStore();
   const { language } = useLanguage();
   const { branding } = useBranding();
+  const { hasFeature } = useFeatures();
   const [checkingSession, setCheckingSession] = useState(true);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [highRiskCount, setHighRiskCount] = useState(0);
+
+  const visibleNavItems = NAV_ITEMS.filter((item) => !item.feature || hasFeature(item.feature));
 
   // Clear the pending indicator once the route has actually changed.
   useEffect(() => {
@@ -107,6 +113,10 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     );
   }
 
+  if (user && !['school_admin'].includes(user.role)) {
+    return <WrongPortalAccess role={user.role} />;
+  }
+
   return (
     <div className="flex min-h-screen">
       {mobileNavOpen && (
@@ -135,7 +145,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
           </button>
         </div>
         <nav className="space-y-1">
-          {NAV_ITEMS.map((item) => {
+          {visibleNavItems.map((item) => {
             // Highlight optimistically on the clicked link so the active
             // state updates the instant a user clicks, without waiting for
             // the route transition to finish.

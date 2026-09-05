@@ -156,6 +156,20 @@ model School {
   featureSms          Boolean @default(false)
   featureUrdu         Boolean @default(false)
 
+  // feature flags — added for the full feature-management system
+  featureCoordinator    Boolean @default(true)
+  featureLeaveRequests  Boolean @default(true)
+  featureConsentForms   Boolean @default(true)
+  featureFinance        Boolean @default(true)
+  featureAiInsights     Boolean @default(false)
+  featureAttendance     Boolean @default(true)
+  featureTimetable      Boolean @default(true)
+  featureAnnouncements  Boolean @default(true)
+  featureCalendar       Boolean @default(true)
+  featureReportCards    Boolean @default(true)
+  featureBadges         Boolean @default(true)
+  featureMonthlyReports Boolean @default(true)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

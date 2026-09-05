@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { verifyToken } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
+import { requireFeature } from '../middleware/featureCheck';
 import {
   createCoordinatorAnnouncement,
   deleteCoordinatorAnnouncement,
@@ -18,7 +19,7 @@ import {
 
 const router = Router();
 
-router.use(verifyToken, requireRole('coordinator'));
+router.use(verifyToken, requireRole('coordinator'), requireFeature('featureCoordinator'));
 
 router.get('/dashboard', getDashboard);
 

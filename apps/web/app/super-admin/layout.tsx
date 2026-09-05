@@ -11,6 +11,7 @@ import { useLanguage } from '@/lib/LanguageContext';
 import { t } from '@/lib/translations';
 import { LogoutButton } from '@/components/logout-button';
 import { useBranding } from '@/lib/BrandingContext';
+import { WrongPortalAccess } from '@/components/wrong-portal';
 import { PortalToggles } from '@/components/portal-toggles';
 
 const NAV_ITEMS = [
@@ -84,6 +85,10 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
         Loading...
       </div>
     );
+  }
+
+  if (user && !['super_admin'].includes(user.role)) {
+    return <WrongPortalAccess role={user.role} />;
   }
 
   return (

@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { AxiosError } from 'axios';
+import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -38,6 +39,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { BrandingEditor, BrandingFormData, EMPTY_BRANDING_FORM } from '@/components/branding/BrandingEditor';
+import { FeaturesEditor } from '@/components/features/FeaturesEditor';
 
 interface School {
   id: string;
@@ -118,6 +120,11 @@ export default function SchoolsPage() {
   const [brandingSchool, setBrandingSchool] = useState<School | null>(null);
   const [brandingInitial, setBrandingInitial] = useState<BrandingFormData>(EMPTY_BRANDING_FORM);
   const [brandingLoading, setBrandingLoading] = useState(false);
+
+  const [featuresDialogOpen, setFeaturesDialogOpen] = useState(false);
+  const [featuresSchool, setFeaturesSchool] = useState<School | null>(null);
+  const [featuresValues, setFeaturesValues] = useState<Record<string, boolean>>({});
+  const [featuresLoading, setFeaturesLoading] = useState(false);
 
   async function loadSchools() {
     setLoading(true);
@@ -315,6 +322,29 @@ export default function SchoolsPage() {
       loginBgColor: data.loginBgColor,
       fontFamily: data.fontFamily,
     });
+    toast.success('Branding updated!');
+  }
+
+  async function openFeaturesDialog(school: School) {
+    setFeaturesSchool(school);
+    setFeaturesValues({});
+    setFeaturesDialogOpen(true);
+    setFeaturesLoading(true);
+    try {
+      const res = await api.get<{ success: boolean; data: Record<string, boolean> }>(
+        `/api/super/schools/${school.id}/features`
+      );
+      setFeaturesValues(res.data.data);
+    } catch {
+      setFeaturesValues({});
+    } finally {
+      setFeaturesLoading(false);
+    }
+  }
+
+  async function handleToggleFeature(key: string, enabled: boolean) {
+    if (!featuresSchool) return;
+    await api.patch(`/api/super/schools/${featuresSchool.id}/features`, { [key]: enabled });
   }
 
   function activeFeatures(school: School): string[] {
@@ -397,6 +427,9 @@ export default function SchoolsPage() {
                         </Button>
                         <Button variant="outline" size="sm" onClick={() => openBrandingDialog(school)}>
                           🎨 Customize
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => openFeaturesDialog(school)}>
+                          ⚙️ Features
                         </Button>
                         <Button
                           variant={school.admin ? 'outline' : 'default'}
@@ -676,6 +709,30 @@ export default function SchoolsPage() {
                 window.open('/login', '_blank', 'noopener,noreferrer');
               }}
             />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={featuresDialogOpen} onOpenChange={setFeaturesDialogOpen}>
+        <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Feature Management — {featuresSchool?.name ?? ''}</DialogTitle>
+          </DialogHeader>
+
+          {featuresLoading ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">Loading features...</p>
+          ) : (
+            <>
+              <FeaturesEditor values={featuresValues} onToggle={handleToggleFeature} />
+              <div className="flex items-center justify-between gap-4 border-t pt-4">
+                <p className="text-xs text-muted-foreground">
+                  Changes take effect on next login for school users.
+                </p>
+                <Button variant="outline" onClick={() => setFeaturesDialogOpen(false)}>
+                  Close
+                </Button>
+              </div>
+            </>
           )}
         </DialogContent>
       </Dialog>

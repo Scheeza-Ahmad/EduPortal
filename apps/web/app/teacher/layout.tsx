@@ -8,21 +8,24 @@ import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import { useLanguage } from '@/lib/LanguageContext';
-import { t } from '@/lib/translations';
+import { t, TranslationKey } from '@/lib/translations';
 import { LogoutButton } from '@/components/logout-button';
 import { useBranding } from '@/lib/BrandingContext';
+import { WrongPortalAccess } from '@/components/wrong-portal';
+import { useFeatures } from '@/lib/FeaturesContext';
+import type { SchoolFeatures } from '@/lib/FeaturesContext';
 import { PortalToggles } from '@/components/portal-toggles';
 
-const NAV_ITEMS = [
-  { href: '/teacher', key: 'dashboard' as const },
-  { href: '/teacher/activities', key: 'activities' as const },
-  { href: '/teacher/attendance', key: 'attendance' as const },
-  { href: '/teacher/classes', key: 'myClasses' as const },
-  { href: '/teacher/timetable', key: 'timetable' as const },
-  { href: '/teacher/announcements', key: 'announcements' as const },
-  { href: '/teacher/monthly-report', key: 'monthlyReport' as const },
-  { href: '/teacher/class-fees', key: 'classFees' as const },
-  { href: '/teacher/leave-requests', key: 'leaveRequests' as const },
+const NAV_ITEMS: { href: string; key: TranslationKey; feature?: keyof SchoolFeatures }[] = [
+  { href: '/teacher', key: 'dashboard' },
+  { href: '/teacher/activities', key: 'activities' },
+  { href: '/teacher/attendance', key: 'attendance', feature: 'featureAttendance' },
+  { href: '/teacher/classes', key: 'myClasses' },
+  { href: '/teacher/timetable', key: 'timetable', feature: 'featureTimetable' },
+  { href: '/teacher/announcements', key: 'announcements', feature: 'featureAnnouncements' },
+  { href: '/teacher/monthly-report', key: 'monthlyReport', feature: 'featureMonthlyReports' },
+  { href: '/teacher/class-fees', key: 'classFees', feature: 'featureFinance' },
+  { href: '/teacher/leave-requests', key: 'leaveRequests', feature: 'featureLeaveRequests' },
 ];
 
 export default function TeacherLayout({ children }: { children: ReactNode }) {
@@ -31,9 +34,12 @@ export default function TeacherLayout({ children }: { children: ReactNode }) {
   const { accessToken, user, setAuth, clearAuth } = useAuthStore();
   const { language } = useLanguage();
   const { branding } = useBranding();
+  const { hasFeature } = useFeatures();
   const [checkingSession, setCheckingSession] = useState(true);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  const visibleNavItems = NAV_ITEMS.filter((item) => !item.feature || hasFeature(item.feature));
 
   // Clear the pending indicator once the route has actually changed.
   useEffect(() => {
@@ -91,6 +97,10 @@ export default function TeacherLayout({ children }: { children: ReactNode }) {
     );
   }
 
+  if (user && !['teacher', 'coordinator'].includes(user.role)) {
+    return <WrongPortalAccess role={user.role} />;
+  }
+
   return (
     <div className="flex min-h-screen">
       {mobileNavOpen && (
@@ -119,7 +129,7 @@ export default function TeacherLayout({ children }: { children: ReactNode }) {
           </button>
         </div>
         <nav className="space-y-1">
-          {NAV_ITEMS.map((item) => {
+          {visibleNavItems.map((item) => {
             // Highlight optimistically on the clicked link so the active
             // state updates the instant a user clicks, without waiting for
             // the route transition to finish.

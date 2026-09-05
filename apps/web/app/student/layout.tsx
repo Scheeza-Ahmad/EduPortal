@@ -8,21 +8,24 @@ import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import { useLanguage } from '@/lib/LanguageContext';
-import { t } from '@/lib/translations';
+import { t, TranslationKey } from '@/lib/translations';
 import { LogoutButton } from '@/components/logout-button';
 import { useBranding } from '@/lib/BrandingContext';
+import { WrongPortalAccess } from '@/components/wrong-portal';
+import { useFeatures } from '@/lib/FeaturesContext';
+import type { SchoolFeatures } from '@/lib/FeaturesContext';
 import { PortalToggles } from '@/components/portal-toggles';
 
-const NAV_ITEMS = [
-  { href: '/student', key: 'dashboard' as const },
-  { href: '/student/activities', key: 'activities' as const },
-  { href: '/student/grades', key: 'grades' as const },
-  { href: '/student/attendance', key: 'attendance' as const },
-  { href: '/student/fees', key: 'fees' as const },
-  { href: '/student/leave-request', key: 'leave' as const },
-  { href: '/student/badges', key: 'badges' as const },
-  { href: '/student/insights', key: 'insights' as const, icon: '🤖' },
-  { href: '/student/notifications', key: 'notifications' as const },
+const NAV_ITEMS: { href: string; key: TranslationKey; icon?: string; feature?: keyof SchoolFeatures }[] = [
+  { href: '/student', key: 'dashboard' },
+  { href: '/student/activities', key: 'activities' },
+  { href: '/student/grades', key: 'grades' },
+  { href: '/student/attendance', key: 'attendance', feature: 'featureAttendance' },
+  { href: '/student/fees', key: 'fees', feature: 'featureFinance' },
+  { href: '/student/leave-request', key: 'leave', feature: 'featureLeaveRequests' },
+  { href: '/student/badges', key: 'badges', feature: 'featureBadges' },
+  { href: '/student/insights', key: 'insights', icon: '🤖', feature: 'featureAiInsights' },
+  { href: '/student/notifications', key: 'notifications' },
 ];
 
 export default function StudentLayout({ children }: { children: ReactNode }) {
@@ -31,10 +34,13 @@ export default function StudentLayout({ children }: { children: ReactNode }) {
   const { accessToken, user, setAuth, clearAuth } = useAuthStore();
   const { language } = useLanguage();
   const { branding } = useBranding();
+  const { hasFeature } = useFeatures();
   const [checkingSession, setCheckingSession] = useState(true);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+
+  const visibleNavItems = NAV_ITEMS.filter((item) => !item.feature || hasFeature(item.feature));
 
   // Clear the pending indicator once the route has actually changed.
   useEffect(() => {
@@ -110,6 +116,10 @@ export default function StudentLayout({ children }: { children: ReactNode }) {
     );
   }
 
+  if (user && !['student'].includes(user.role)) {
+    return <WrongPortalAccess role={user.role} />;
+  }
+
   return (
     <div className="flex min-h-screen">
       {mobileNavOpen && (
@@ -138,7 +148,7 @@ export default function StudentLayout({ children }: { children: ReactNode }) {
           </button>
         </div>
         <nav className="space-y-1">
-          {NAV_ITEMS.map((item) => {
+          {visibleNavItems.map((item) => {
             // Highlight optimistically on the clicked link so the active
             // state updates the instant a user clicks, without waiting for
             // the route transition to finish.

@@ -1,6 +1,7 @@
 'use client';
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import {
   Bar,
   BarChart,
@@ -20,6 +21,7 @@ import { api } from '@/lib/api';
 import { CHART_COLORS } from '@/lib/chartColors';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 
@@ -79,6 +81,13 @@ interface AuditLogEntry {
   targetTable: string | null;
   createdAt: string;
   user: { name: string } | null;
+}
+
+interface PortalRow {
+  id: string;
+  name: string;
+  admin: { id: string; name: string; email: string } | null;
+  isActive: boolean;
 }
 
 // ---------------------------------------------------------------
@@ -166,6 +175,9 @@ export default function SuperAdminDashboardPage() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
+  const [portals, setPortals] = useState<PortalRow[]>([]);
+  const [viewingPortalId, setViewingPortalId] = useState<string | null>(null);
+
   async function loadFeed() {
     try {
       const res = await api.get<{ success: boolean; data: { logs: AuditLogEntry[] } }>(
@@ -175,6 +187,58 @@ export default function SuperAdminDashboardPage() {
     } catch {
       // Non-fatal — the feed will just stay empty/stale.
     }
+  }
+
+  async function loadPortals() {
+    try {
+      const res = await api.get<{ success: boolean; data: { schools: PortalRow[] } }>(
+        '/api/super/schools?limit=100'
+      );
+      setPortals(res.data.data.schools);
+    } catch {
+      // Non-fatal — the portal list will just stay empty.
+    }
+  }
+
+  async function handleViewPortal(school: PortalRow) {
+    setViewingPortalId(school.id);
+    try {
+      const res = await api.get<{
+        success: boolean;
+        data: Partial<{
+          portalName: string;
+          logoUrl: string | null;
+          primaryColor: string;
+          sidebarColor: string | null;
+          accentColor: string;
+          fontFamily: string;
+          loginBgColor: string;
+          loginMessage: string | null;
+        }>;
+      }>(`/api/super/schools/${school.id}/branding`);
+      const b = res.data.data;
+      // Temporarily stage this school's branding where the login page (and
+      // every portal layout after it) already knows to look, then open a
+      // fresh tab so this session's own view is never disturbed.
+      localStorage.setItem(
+        'school_branding',
+        JSON.stringify({
+          portalName: b.portalName || school.name,
+          logoUrl: b.logoUrl ?? null,
+          primaryColor: b.primaryColor || '#1a56db',
+          sidebarColor: b.sidebarColor ?? null,
+          accentColor: b.accentColor || '#f97316',
+          fontFamily: b.fontFamily || 'Inter',
+          loginBgColor: b.loginBgColor || '#ffffff',
+          loginMessage: b.loginMessage ?? null,
+        })
+      );
+    } catch {
+      // ignore — the new tab just won't be pre-branded
+    } finally {
+      setViewingPortalId(null);
+    }
+    window.open('/login', '_blank', 'noopener,noreferrer');
   }
 
   useEffect(() => {
@@ -189,7 +253,7 @@ export default function SuperAdminDashboardPage() {
         if (cancelled) return;
         setStats(statsRes.data.data);
         setAnalytics(analyticsRes.data.data);
-        await loadFeed();
+        await Promise.all([loadFeed(), loadPortals()]);
       } catch {
         if (!cancelled) setError('Failed to load dashboard data.');
       } finally {
@@ -567,6 +631,56 @@ export default function SuperAdminDashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">School Portals</CardTitle>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          {portals.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No schools yet.</p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-muted-foreground">
+                  <th className="py-2 pr-4 font-medium">School Name</th>
+                  <th className="py-2 pr-4 font-medium">Admin</th>
+                  <th className="py-2 pr-4 font-medium">Status</th>
+                  <th className="py-2 pr-4 font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {portals.map((school) => (
+                  <tr key={school.id} className="border-b last:border-b-0">
+                    <td className="py-2 pr-4 font-medium">{school.name}</td>
+                    <td className="py-2 pr-4 text-muted-foreground">
+                      {school.admin ? school.admin.name : 'Not assigned'}
+                    </td>
+                    <td className="py-2 pr-4">
+                      <Badge variant={school.isActive ? 'default' : 'secondary'}>
+                        {school.isActive ? 'Active' : 'Inactive'}
+                      </Badge>
+                    </td>
+                    <td className="py-2 pr-4 space-x-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={viewingPortalId === school.id}
+                        onClick={() => handleViewPortal(school)}
+                      >
+                        {viewingPortalId === school.id ? '...' : 'View Portal'}
+                      </Button>
+                      <Button variant="outline" size="sm" asChild>
+                        <Link href="/super-admin/schools">Customize</Link>
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

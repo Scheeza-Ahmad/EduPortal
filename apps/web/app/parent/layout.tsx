@@ -9,9 +9,12 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import { useParentStore, Child } from '@/lib/parentStore';
 import { useLanguage } from '@/lib/LanguageContext';
-import { t } from '@/lib/translations';
+import { t, TranslationKey } from '@/lib/translations';
 import { LogoutButton } from '@/components/logout-button';
 import { useBranding } from '@/lib/BrandingContext';
+import { WrongPortalAccess } from '@/components/wrong-portal';
+import { useFeatures } from '@/lib/FeaturesContext';
+import type { SchoolFeatures } from '@/lib/FeaturesContext';
 import { PortalToggles } from '@/components/portal-toggles';
 import {
   Select,
@@ -21,16 +24,16 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 
-const NAV_ITEMS = [
-  { href: '/parent', key: 'dashboard' as const },
-  { href: '/parent/grades', key: 'grades' as const },
-  { href: '/parent/attendance', key: 'attendance' as const },
-  { href: '/parent/fees', key: 'fees' as const },
-  { href: '/parent/messages', key: 'messages' as const },
-  { href: '/parent/consent-forms', key: 'consentForms' as const },
-  { href: '/parent/timetable', key: 'timetable' as const },
-  { href: '/parent/announcements', key: 'announcements' as const },
-  { href: '/parent/report-card', key: 'reportCard' as const },
+const NAV_ITEMS: { href: string; key: TranslationKey; feature?: keyof SchoolFeatures }[] = [
+  { href: '/parent', key: 'dashboard' },
+  { href: '/parent/grades', key: 'grades' },
+  { href: '/parent/attendance', key: 'attendance', feature: 'featureAttendance' },
+  { href: '/parent/fees', key: 'fees', feature: 'featureFinance' },
+  { href: '/parent/messages', key: 'messages' },
+  { href: '/parent/consent-forms', key: 'consentForms', feature: 'featureConsentForms' },
+  { href: '/parent/timetable', key: 'timetable', feature: 'featureTimetable' },
+  { href: '/parent/announcements', key: 'announcements', feature: 'featureAnnouncements' },
+  { href: '/parent/report-card', key: 'reportCard', feature: 'featureReportCards' },
 ];
 
 export default function ParentLayout({ children }: { children: ReactNode }) {
@@ -40,9 +43,12 @@ export default function ParentLayout({ children }: { children: ReactNode }) {
   const { children: kids, selectedChildId, setChildren, selectChild } = useParentStore();
   const { language } = useLanguage();
   const { branding } = useBranding();
+  const { hasFeature } = useFeatures();
   const [checkingSession, setCheckingSession] = useState(true);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  const visibleNavItems = NAV_ITEMS.filter((item) => !item.feature || hasFeature(item.feature));
 
   // Clear the pending indicator once the route has actually changed.
   useEffect(() => {
@@ -110,6 +116,10 @@ export default function ParentLayout({ children }: { children: ReactNode }) {
     );
   }
 
+  if (user && !['parent'].includes(user.role)) {
+    return <WrongPortalAccess role={user.role} />;
+  }
+
   return (
     <div className="flex min-h-screen">
       {mobileNavOpen && (
@@ -138,7 +148,7 @@ export default function ParentLayout({ children }: { children: ReactNode }) {
           </button>
         </div>
         <nav className="space-y-1">
-          {NAV_ITEMS.map((item) => {
+          {visibleNavItems.map((item) => {
             // Highlight optimistically on the clicked link so the active
             // state updates the instant a user clicks, without waiting for
             // the route transition to finish.

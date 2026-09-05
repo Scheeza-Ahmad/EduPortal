@@ -9,14 +9,15 @@ import {
   getAnalytics,
   getAuditLogs,
   getSchoolBranding,
+  getSchoolFeatures,
   getSchools,
   getStats,
   getUsers,
   impersonateUser,
-  toggleFeatures,
   triggerBackup,
   updateSchool,
   updateSchoolBranding,
+  updateSchoolFeatures,
 } from '../controllers/super.controller';
 
 const router = Router();
@@ -34,9 +35,10 @@ router.patch('/schools/:id', updateSchool);
 router.delete('/schools/:id', deleteSchool);
 router.patch('/schools/:id/admin', assignAdmin);
 router.post('/schools/:id/admin/create', createSchoolAdmin);
-router.patch('/schools/:id/features', toggleFeatures);
 router.get('/schools/:id/branding', getSchoolBranding);
 router.patch('/schools/:id/branding', updateSchoolBranding);
+router.get('/schools/:id/features', getSchoolFeatures);
+router.patch('/schools/:id/features', updateSchoolFeatures);
 
 router.get('/audit-logs', getAuditLogs);
 

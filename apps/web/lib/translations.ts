@@ -1,6 +1,6 @@
 export type Language = 'en' | 'ur';
 
-type TranslationKey = keyof typeof translations;
+export type TranslationKey = keyof typeof translations;
 
 export const translations = {
   dashboard: { en: 'Dashboard', ur: 'ڈیش بورڈ' },

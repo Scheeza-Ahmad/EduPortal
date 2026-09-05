@@ -11,6 +11,7 @@ import { useLanguage } from '@/lib/LanguageContext';
 import { t } from '@/lib/translations';
 import { LogoutButton } from '@/components/logout-button';
 import { useBranding } from '@/lib/BrandingContext';
+import { WrongPortalAccess } from '@/components/wrong-portal';
 import { PortalToggles } from '@/components/portal-toggles';
 
 const NAV_ITEMS = [
@@ -76,16 +77,16 @@ export default function FinanceLayout({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
 
-  useEffect(() => {
-    if (!checkingSession && user && !ALLOWED_ROLES.includes(user.role)) {
-      router.replace('/login');
-    }
-  }, [checkingSession, user, router]);
-
   // First-time setup gate: if this school hasn't configured SchoolSettings
   // yet, force the wizard before anything else in the portal is reachable.
+  // Skipped entirely for a wrong-role user — no point probing an endpoint
+  // they can't use before showing them the wrong-portal screen.
   useEffect(() => {
     if (checkingSession) return;
+    if (user && !ALLOWED_ROLES.includes(user.role)) {
+      setCheckingSetup(false);
+      return;
+    }
 
     if (pathname === '/finance/wizard') {
       setCheckingSetup(false);
@@ -112,7 +113,7 @@ export default function FinanceLayout({ children }: { children: ReactNode }) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [checkingSession, pathname]);
+  }, [checkingSession, pathname, user]);
 
   async function handleLogout() {
     try {
@@ -129,6 +130,10 @@ export default function FinanceLayout({ children }: { children: ReactNode }) {
         Loading...
       </div>
     );
+  }
+
+  if (user && !ALLOWED_ROLES.includes(user.role)) {
+    return <WrongPortalAccess role={user.role} />;
   }
 
   const isWizard = pathname === '/finance/wizard';

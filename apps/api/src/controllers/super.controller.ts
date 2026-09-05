@@ -510,41 +510,82 @@ export async function createSchoolAdmin(req: AuthRequest, res: Response): Promis
   send(res, 201, safeUser);
 }
 
+
 // ---------------------------------------------------------------
+// GET /api/super/schools/:id/features
 // PATCH /api/super/schools/:id/features
 // ---------------------------------------------------------------
 
-const toggleFeaturesSchema = z.object({
-  featureParentPortal: z.boolean().optional(),
-  featureAi: z.boolean().optional(),
-  featureSms: z.boolean().optional(),
-  featureUrdu: z.boolean().optional(),
-});
+const FEATURE_KEYS = [
+  'featureParentPortal',
+  'featureAi',
+  'featureSms',
+  'featureUrdu',
+  'featureCoordinator',
+  'featureLeaveRequests',
+  'featureConsentForms',
+  'featureFinance',
+  'featureAiInsights',
+  'featureAttendance',
+  'featureTimetable',
+  'featureAnnouncements',
+  'featureCalendar',
+  'featureReportCards',
+  'featureBadges',
+  'featureMonthlyReports',
+] as const;
+type FeatureKey = (typeof FEATURE_KEYS)[number];
 
-export async function toggleFeatures(req: AuthRequest, res: Response): Promise<void> {
-  const parsed = toggleFeaturesSchema.safeParse(req.body);
+const featureSelect = Object.fromEntries(FEATURE_KEYS.map((k) => [k, true])) as Record<FeatureKey, true>;
+
+export async function getSchoolFeatures(req: AuthRequest, res: Response): Promise<void> {
+  const { id } = req.params;
+
+  const school = await prisma.school.findUnique({ where: { id }, select: featureSelect });
+  if (!school) {
+    send(res, 404, undefined, 'School not found');
+    return;
+  }
+
+  send(res, 200, school);
+}
+
+const updateFeaturesSchema = z
+  .object(Object.fromEntries(FEATURE_KEYS.map((k) => [k, z.boolean().optional()])) as Record<FeatureKey, z.ZodOptional<z.ZodBoolean>>)
+  .refine((data) => Object.keys(data).length > 0, { message: 'No feature flags provided' });
+
+export async function updateSchoolFeatures(req: AuthRequest, res: Response): Promise<void> {
+  const { id } = req.params;
+
+  const school = await prisma.school.findUnique({ where: { id }, select: { id: true } });
+  if (!school) {
+    send(res, 404, undefined, 'School not found');
+    return;
+  }
+
+  const parsed = updateFeaturesSchema.safeParse(req.body);
   if (!parsed.success) {
     send(res, 400, undefined, 'Invalid feature flags');
     return;
   }
 
-  const { id } = req.params;
-
-  const school = await prisma.school.update({
+  const updated = await prisma.school.update({
     where: { id },
     data: parsed.data,
+    select: featureSelect,
   });
 
+  const [[featureKey, enabled]] = Object.entries(parsed.data);
   await auditLog({
     userId: req.user!.userId,
-    action: 'SCHOOL_TOGGLE_FEATURES',
+    action: 'FEATURE_UPDATED',
     targetTable: 'School',
-    targetId: school.id,
-    meta: parsed.data,
+    targetId: id,
+    meta: { feature: featureKey, enabled },
     ip: req.ip,
   });
 
-  send(res, 200, school);
+  send(res, 200, updated);
 }
 
 // ---------------------------------------------------------------

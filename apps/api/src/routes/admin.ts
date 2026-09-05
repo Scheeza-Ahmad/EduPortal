@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { verifyToken } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
+import { requireFeature } from '../middleware/featureCheck';
 import {
   approveWingReport,
   assignCoordinator,
@@ -39,6 +40,7 @@ import {
   getParents,
   getReportCard,
   getSchoolBrandingSelf,
+  getSchoolFeaturesSelf,
   getStats,
   getStatsTrend,
   getStudents,
@@ -79,12 +81,12 @@ router.get('/teachers', getTeachers);
 router.post('/teachers', createTeacher);
 router.patch('/teachers/:id', updateTeacher);
 router.delete('/teachers/:id', deleteTeacher);
-router.patch('/teachers/:id/coordinator', assignCoordinator);
+router.patch('/teachers/:id/coordinator', requireFeature('featureCoordinator'), assignCoordinator);
 
 // Coordinators (dedicated admin page)
-router.get('/coordinators', getCoordinators);
-router.post('/coordinators', createCoordinator);
-router.delete('/coordinators/:id', removeCoordinator);
+router.get('/coordinators', requireFeature('featureCoordinator'), getCoordinators);
+router.post('/coordinators', requireFeature('featureCoordinator'), createCoordinator);
+router.delete('/coordinators/:id', requireFeature('featureCoordinator'), removeCoordinator);
 
 // Classes
 router.get('/classes', getClasses);
@@ -100,25 +102,25 @@ router.delete('/subjects/:id', deleteSubject);
 
 // Timetable — /check-conflict must be registered before /:classId so it isn't
 // swallowed as a classId value.
-router.get('/timetable/check-conflict', checkTimetableConflict);
-router.get('/timetable/:classId', getTimetableForClass);
-router.post('/timetable', upsertTimetableSlot);
-router.delete('/timetable/:slotId', deleteTimetableSlot);
+router.get('/timetable/check-conflict', requireFeature('featureTimetable'), checkTimetableConflict);
+router.get('/timetable/:classId', requireFeature('featureTimetable'), getTimetableForClass);
+router.post('/timetable', requireFeature('featureTimetable'), upsertTimetableSlot);
+router.delete('/timetable/:slotId', requireFeature('featureTimetable'), deleteTimetableSlot);
 
 // Announcements
-router.get('/announcements', getAnnouncements);
-router.post('/announcements', createAnnouncement);
-router.delete('/announcements/:id', deleteAnnouncement);
+router.get('/announcements', requireFeature('featureAnnouncements'), getAnnouncements);
+router.post('/announcements', requireFeature('featureAnnouncements'), createAnnouncement);
+router.delete('/announcements/:id', requireFeature('featureAnnouncements'), deleteAnnouncement);
 
 // Report cards — /bulk/:classId must come before /:studentId so "bulk" isn't
 // swallowed as a studentId value.
-router.get('/report-cards/bulk/:classId', getBulkReportCards);
-router.get('/report-cards/:studentId', getReportCard);
+router.get('/report-cards/bulk/:classId', requireFeature('featureReportCards'), getBulkReportCards);
+router.get('/report-cards/:studentId', requireFeature('featureReportCards'), getReportCard);
 
 // Academic calendar
-router.get('/calendar', getCalendar);
-router.post('/calendar', createCalendarDate);
-router.delete('/calendar/:id', deleteCalendarDate);
+router.get('/calendar', requireFeature('featureCalendar'), getCalendar);
+router.post('/calendar', requireFeature('featureCalendar'), createCalendarDate);
+router.delete('/calendar/:id', requireFeature('featureCalendar'), deleteCalendarDate);
 
 // Parents
 router.get('/parents', getParents);
@@ -126,34 +128,37 @@ router.post('/parents', createParent);
 router.patch('/parents/:id/children', linkParentChildren);
 
 // Finance user management
-router.post('/finance/create-user', createFinanceUser);
-router.get('/finance/users', getFinanceUsers);
-router.patch('/finance/users/:id', updateFinanceUser);
-router.patch('/finance/users/:id/deactivate', deactivateFinanceUser);
-router.patch('/finance/users/:id/reactivate', reactivateFinanceUser);
+router.post('/finance/create-user', requireFeature('featureFinance'), createFinanceUser);
+router.get('/finance/users', requireFeature('featureFinance'), getFinanceUsers);
+router.patch('/finance/users/:id', requireFeature('featureFinance'), updateFinanceUser);
+router.patch('/finance/users/:id/deactivate', requireFeature('featureFinance'), deactivateFinanceUser);
+router.patch('/finance/users/:id/reactivate', requireFeature('featureFinance'), reactivateFinanceUser);
 
 // Wing reports (submitted by coordinators)
-router.get('/wing-reports', getWingReports);
-router.patch('/wing-reports/:id/approve', approveWingReport);
-router.patch('/wing-reports/:id/reject', rejectWingReport);
+router.get('/wing-reports', requireFeature('featureCoordinator'), getWingReports);
+router.patch('/wing-reports/:id/approve', requireFeature('featureCoordinator'), approveWingReport);
+router.patch('/wing-reports/:id/reject', requireFeature('featureCoordinator'), rejectWingReport);
 
 // Leave requests
-router.get('/leave-requests', getAdminLeaveRequests);
-router.patch('/leave-requests/:id/review', reviewAdminLeaveRequest);
+router.get('/leave-requests', requireFeature('featureLeaveRequests'), getAdminLeaveRequests);
+router.patch('/leave-requests/:id/review', requireFeature('featureLeaveRequests'), reviewAdminLeaveRequest);
 
 // Consent forms — /:id/responses must come before nothing conflicting here
 // since DELETE and GET on /:id don't overlap with /:id/responses.
-router.get('/consent-forms', getConsentForms);
-router.post('/consent-forms', createConsentForm);
-router.delete('/consent-forms/:id', deleteConsentForm);
-router.get('/consent-forms/:id/responses', getConsentFormResponses);
+router.get('/consent-forms', requireFeature('featureConsentForms'), getConsentForms);
+router.post('/consent-forms', requireFeature('featureConsentForms'), createConsentForm);
+router.delete('/consent-forms/:id', requireFeature('featureConsentForms'), deleteConsentForm);
+router.get('/consent-forms/:id/responses', requireFeature('featureConsentForms'), getConsentFormResponses);
 
 // AI / analytics
-router.get('/at-risk-students', getAtRiskStudents);
+router.get('/at-risk-students', requireFeature('featureAiInsights'), getAtRiskStudents);
 router.get('/search', globalSearch);
 
 // School branding — refines what super admin initially set
 router.get('/school-settings/branding', getSchoolBrandingSelf);
 router.patch('/school-settings/branding', updateSchoolBrandingSelf);
+
+// School features — read-only for school_admin; only super admin can change these
+router.get('/school-settings/features', getSchoolFeaturesSelf);
 
 export default router;

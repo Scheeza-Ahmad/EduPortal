@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, ReactNode, useContext, useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
 
 export interface Branding {
   portalName: string;
@@ -75,8 +76,17 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
   // would render different markup on the server vs. the client's first
   // paint and trigger a hydration mismatch.
   const [branding, setBrandingState] = useState<Branding>(defaultBranding);
+  const pathname = usePathname();
+  // The login page always shows plain default EduPortal branding — a
+  // school's look only applies once you're inside its portal. `/` also
+  // redirects straight to /login, so it never needs a real value either.
+  const isLoginPage = pathname === null || pathname === '/' || pathname.startsWith('/login');
 
   useEffect(() => {
+    if (isLoginPage) {
+      applyBrandingToDOM(defaultBranding);
+      return;
+    }
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
@@ -89,8 +99,7 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
       // ignore — localStorage may be unavailable or hold invalid JSON
     }
     applyBrandingToDOM(defaultBranding);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isLoginPage]);
 
   function setBranding(b: Branding) {
     setBrandingState(b);
@@ -99,7 +108,11 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
     } catch {
       // ignore
     }
-    applyBrandingToDOM(b);
+    // Written to localStorage either way (the next portal page picks it up
+    // on mount), but only painted to the DOM once we're actually off the
+    // login page — logging in shouldn't flash the new colors before the
+    // redirect even happens.
+    if (!isLoginPage) applyBrandingToDOM(b);
   }
 
   return (

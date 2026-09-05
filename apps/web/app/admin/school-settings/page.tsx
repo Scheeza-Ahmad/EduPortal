@@ -2,10 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import { AxiosError } from 'axios';
+import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { useBranding } from '@/lib/BrandingContext';
 import { ErrorState } from '@/components/shared/ErrorState';
 import { BrandingEditor, BrandingFormData, EMPTY_BRANDING_FORM } from '@/components/branding/BrandingEditor';
+import { FeaturesEditor } from '@/components/features/FeaturesEditor';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
 function getErrorMessage(err: unknown, fallback: string): string {
   const axiosErr = err as AxiosError<{ error?: string }>;
@@ -17,6 +20,9 @@ export default function SchoolSettingsPage() {
   const [initial, setInitial] = useState<BrandingFormData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const [features, setFeaturesState] = useState<Record<string, boolean>>({});
+  const [featuresLoading, setFeaturesLoading] = useState(true);
 
   async function load() {
     setLoading(true);
@@ -53,8 +59,23 @@ export default function SchoolSettingsPage() {
     }
   }
 
+  async function loadFeatures() {
+    setFeaturesLoading(true);
+    try {
+      const res = await api.get<{ success: boolean; data: Record<string, boolean> }>(
+        '/api/admin/school-settings/features'
+      );
+      setFeaturesState(res.data.data);
+    } catch {
+      setFeaturesState({});
+    } finally {
+      setFeaturesLoading(false);
+    }
+  }
+
   useEffect(() => {
     load();
+    loadFeatures();
   }, []);
 
   async function handleSave(data: BrandingFormData) {
@@ -94,6 +115,7 @@ export default function SchoolSettingsPage() {
       loginBgColor: saved.loginBgColor,
       loginMessage: saved.loginMessage,
     });
+    toast.success('Branding updated!');
   }
 
   return (
@@ -105,7 +127,29 @@ export default function SchoolSettingsPage() {
       ) : error ? (
         <ErrorState message={error} onRetry={load} />
       ) : initial ? (
-        <BrandingEditor title="Customize Your Portal" initial={initial} onSave={handleSave} />
+        <Tabs defaultValue="branding">
+          <TabsList>
+            <TabsTrigger value="branding">Branding</TabsTrigger>
+            <TabsTrigger value="features">Features</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="branding" className="pt-4">
+            <BrandingEditor title="Customize Your Portal" initial={initial} onSave={handleSave} />
+          </TabsContent>
+
+          <TabsContent value="features" className="space-y-4 pt-4">
+            {featuresLoading ? (
+              <p className="text-sm text-muted-foreground">Loading features...</p>
+            ) : (
+              <>
+                <FeaturesEditor values={features} readOnly />
+                <p className="text-xs text-muted-foreground">
+                  To enable or disable features, contact your EduPortal administrator.
+                </p>
+              </>
+            )}
+          </TabsContent>
+        </Tabs>
       ) : null}
     </div>
   );
