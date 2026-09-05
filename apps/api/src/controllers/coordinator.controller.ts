@@ -5,7 +5,7 @@ import { prisma } from '../utils/prisma';
 import { send } from '../utils/response';
 import { auditLog } from '../utils/audit';
 import { AuthRequest } from '../middleware/auth';
-import { notifyAnnouncementRecipients } from '../utils/announcementNotify';
+import { notifyAnnouncementAudience, notifyAnnouncementRecipients } from '../utils/announcementNotify';
 
 // ---------------------------------------------------------------
 // Shared helpers
@@ -721,6 +721,9 @@ const createCoordinatorAnnouncementSchema = z.object({
   title: z.string().min(1).max(200),
   body: z.string().min(1).max(2000),
   targetWing: z.boolean(),
+  // Controls only who gets *notified* — targetWing still controls where the
+  // announcement itself is stored/displayed (per wing class, or school-wide).
+  audience: z.enum(['wing_teachers', 'wing_students', 'school_wide']).optional(),
 });
 
 export async function createCoordinatorAnnouncement(req: AuthRequest, res: Response): Promise<void> {
@@ -732,7 +735,7 @@ export async function createCoordinatorAnnouncement(req: AuthRequest, res: Respo
     send(res, 400, undefined, 'Invalid announcement data');
     return;
   }
-  const { title, body, targetWing } = parsed.data;
+  const { title, body, targetWing, audience } = parsed.data;
 
   if (targetWing) {
     const classes = await getWingClasses(ctx.schoolId, ctx.wing);
@@ -747,17 +750,28 @@ export async function createCoordinatorAnnouncement(req: AuthRequest, res: Respo
       userId: req.user!.userId,
       action: 'COORDINATOR_ANNOUNCEMENT_CREATE',
       targetTable: 'Announcement',
-      meta: { title, targetWing: true, count: created.length },
+      meta: { title, targetWing: true, count: created.length, audience },
       ip: req.ip,
     });
-    for (const c of classes) {
-      await notifyAnnouncementRecipients({
+    if (audience === 'wing_teachers') {
+      await notifyAnnouncementAudience({
         schoolId: ctx.schoolId,
         authorId: req.user!.userId,
         title,
         body,
-        classId: c.id,
+        audience: 'wing_teachers',
+        wing: ctx.wing,
       });
+    } else {
+      for (const c of classes) {
+        await notifyAnnouncementRecipients({
+          schoolId: ctx.schoolId,
+          authorId: req.user!.userId,
+          title,
+          body,
+          classId: c.id,
+        });
+      }
     }
     send(res, 201, { announcements: created });
     return;
@@ -772,7 +786,7 @@ export async function createCoordinatorAnnouncement(req: AuthRequest, res: Respo
     action: 'COORDINATOR_ANNOUNCEMENT_CREATE',
     targetTable: 'Announcement',
     targetId: announcement.id,
-    meta: { title, targetWing: false },
+    meta: { title, targetWing: false, audience },
     ip: req.ip,
   });
 

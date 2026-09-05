@@ -29,7 +29,16 @@ interface ClassOption {
   id: string;
   number: number;
   section: string;
+  classTeacherId: string | null;
 }
+
+interface SubjectOption {
+  id: string;
+  name: string;
+  classId: string;
+}
+
+type Audience = 'my_class' | 'my_subject_students' | 'all_teachers' | 'school_wide';
 
 interface Announcement {
   id: string;
@@ -46,14 +55,23 @@ interface AnnouncementForm {
   title: string;
   body: string;
   classId: string;
+  audience: Audience;
+  subjectId: string;
 }
 
-const EMPTY_FORM: AnnouncementForm = { title: '', body: '', classId: '' };
+const EMPTY_FORM: AnnouncementForm = {
+  title: '',
+  body: '',
+  classId: '',
+  audience: 'my_class',
+  subjectId: '',
+};
 
 export default function TeacherAnnouncementsPage() {
   const currentUserId = useAuthStore((state) => state.user?.id);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [classes, setClasses] = useState<ClassOption[]>([]);
+  const [subjects, setSubjects] = useState<SubjectOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -89,8 +107,20 @@ export default function TeacherAnnouncementsPage() {
     }
   }
 
+  async function loadSubjects() {
+    try {
+      const res = await api.get<{ success: boolean; data: { subjects: SubjectOption[] } }>(
+        '/api/teacher/subjects'
+      );
+      setSubjects(res.data.data.subjects);
+    } catch {
+      // Non-fatal — the "my subject students" audience just won't be usable.
+    }
+  }
+
   useEffect(() => {
     loadClasses();
+    loadSubjects();
     loadAnnouncements();
   }, []);
 
@@ -100,13 +130,37 @@ export default function TeacherAnnouncementsPage() {
     setDialogOpen(true);
   }
 
+  function isClassTeacherOf(classId: string): boolean {
+    return classes.find((c) => c.id === classId)?.classTeacherId === currentUserId;
+  }
+
+  function audienceOptionsFor(classId: string): { value: Audience; label: string }[] {
+    if (isClassTeacherOf(classId)) {
+      return [
+        { value: 'my_class', label: 'My class students (Class members only)' },
+        { value: 'all_teachers', label: 'All teachers in school' },
+        { value: 'school_wide', label: 'School-wide' },
+      ];
+    }
+    return [
+      { value: 'my_subject_students', label: 'Students in my subject' },
+      { value: 'school_wide', label: 'School-wide' },
+    ];
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setFormError(null);
     setSubmitting(true);
 
     try {
-      await api.post('/api/teacher/announcements', form);
+      await api.post('/api/teacher/announcements', {
+        title: form.title,
+        body: form.body,
+        classId: form.classId,
+        audience: form.audience,
+        subjectId: form.audience === 'my_subject_students' ? form.subjectId || undefined : undefined,
+      });
       setDialogOpen(false);
       await loadAnnouncements();
     } catch (err) {
@@ -197,7 +251,14 @@ export default function TeacherAnnouncementsPage() {
               <Label>Class</Label>
               <Select
                 value={form.classId}
-                onValueChange={(v) => setForm((f) => ({ ...f, classId: v }))}
+                onValueChange={(v) =>
+                  setForm((f) => ({
+                    ...f,
+                    classId: v,
+                    audience: audienceOptionsFor(v)[0].value,
+                    subjectId: '',
+                  }))
+                }
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select a class" />
@@ -212,6 +273,47 @@ export default function TeacherAnnouncementsPage() {
                 </SelectContent>
               </Select>
             </div>
+
+            {form.classId && (
+              <div className="space-y-2">
+                <Label>Audience</Label>
+                <Select
+                  value={form.audience}
+                  onValueChange={(v) => setForm((f) => ({ ...f, audience: v as Audience }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {audienceOptionsFor(form.classId).map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {form.audience === 'my_subject_students' && (
+              <div className="space-y-2">
+                <Label>Subject</Label>
+                <Select value={form.subjectId} onValueChange={(v) => setForm((f) => ({ ...f, subjectId: v }))}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a subject" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {subjects
+                      .filter((s) => s.classId === form.classId)
+                      .map((s) => (
+                        <SelectItem key={s.id} value={s.id}>
+                          {s.name}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label htmlFor="announcement-title">Title</Label>

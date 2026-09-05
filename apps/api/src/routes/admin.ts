@@ -5,11 +5,13 @@ import { requireFeature } from '../middleware/featureCheck';
 import {
   approveWingReport,
   assignCoordinator,
+  autoGenerateTimetable,
   bulkImportStudents,
   checkTimetableConflict,
   createAnnouncement,
   createCalendarDate,
   createClass,
+  createClassWithSubjects,
   createConsentForm,
   createCoordinator,
   createFinanceUser,
@@ -36,6 +38,7 @@ import {
   getConsentForms,
   getCoordinators,
   getFinanceUsers,
+  getTimetableSettings,
   globalSearch,
   getParents,
   getReportCard,
@@ -57,6 +60,7 @@ import {
   updateClass,
   updateFinanceUser,
   updateSchoolBrandingSelf,
+  updateTimetableSettings,
   reviewStaffLeave,
   updateStudent,
   updateSubject,
@@ -93,6 +97,7 @@ router.delete('/coordinators/:id', requireFeature('featureCoordinator'), removeC
 // Classes
 router.get('/classes', getClasses);
 router.post('/classes', createClass);
+router.post('/classes/section', createClassWithSubjects);
 router.patch('/classes/:id', updateClass);
 router.delete('/classes/:id', deleteClass);
 
@@ -105,6 +110,7 @@ router.delete('/subjects/:id', deleteSubject);
 // Timetable — /check-conflict must be registered before /:classId so it isn't
 // swallowed as a classId value.
 router.get('/timetable/check-conflict', requireFeature('featureTimetable'), checkTimetableConflict);
+router.post('/timetable/auto-generate', requireFeature('featureTimetable'), autoGenerateTimetable);
 router.get('/timetable/:classId', requireFeature('featureTimetable'), getTimetableForClass);
 router.post('/timetable', requireFeature('featureTimetable'), upsertTimetableSlot);
 router.delete('/timetable/:slotId', requireFeature('featureTimetable'), deleteTimetableSlot);
@@ -162,6 +168,10 @@ router.patch('/school-settings/branding', updateSchoolBrandingSelf);
 
 // School features — read-only for school_admin; only super admin can change these
 router.get('/school-settings/features', getSchoolFeaturesSelf);
+
+// Timetable settings
+router.get('/school-settings/timetable', getTimetableSettings);
+router.patch('/school-settings/timetable', updateTimetableSettings);
 
 // Staff leaves — teacher leaves reviewed by coordinators + coordinators' own leave
 router.get('/staff-leaves', getStaffLeaves);

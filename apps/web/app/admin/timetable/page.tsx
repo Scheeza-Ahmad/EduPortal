@@ -69,6 +69,11 @@ const EMPTY_FORM: SlotForm = { subjectId: '', dayOfWeek: '1', startTime: '', end
 
 const DAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
+interface AutoGenerateResult {
+  created: number;
+  conflicts: { subject: string; reason: string }[];
+}
+
 export default function TimetablePage() {
   const [classes, setClasses] = useState<ClassOption[]>([]);
   const [selectedClassId, setSelectedClassId] = useState('');
@@ -83,6 +88,13 @@ export default function TimetablePage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [conflictWarning, setConflictWarning] = useState<string | null>(null);
+  const [checkingConflict, setCheckingConflict] = useState(false);
+
+  const [autoGenDialogOpen, setAutoGenDialogOpen] = useState(false);
+  const [autoGenSubmitting, setAutoGenSubmitting] = useState(false);
+  const [autoGenResult, setAutoGenResult] = useState<AutoGenerateResult | null>(null);
+  const [autoGenError, setAutoGenError] = useState<string | null>(null);
 
   useEffect(() => {
     api
@@ -131,6 +143,7 @@ export default function TimetablePage() {
     setEditingSlot(null);
     setForm(EMPTY_FORM);
     setFormError(null);
+    setConflictWarning(null);
     setDialogOpen(true);
   }
 
@@ -144,6 +157,7 @@ export default function TimetablePage() {
       room: slot.room ?? '',
     });
     setFormError(null);
+    setConflictWarning(null);
     setDialogOpen(true);
   }
 
@@ -172,6 +186,49 @@ export default function TimetablePage() {
     }
   }
 
+  // Live conflict check — fires whenever subject/day/time are all filled in,
+  // so the admin sees the warning (and Save gets disabled) before they even
+  // try to submit, not just after a 409 comes back.
+  useEffect(() => {
+    const teacherId = subjects.find((s) => s.id === form.subjectId)?.teacher.id;
+    if (!teacherId || !form.startTime || !form.endTime) {
+      setConflictWarning(null);
+      return;
+    }
+    if (form.endTime <= form.startTime) {
+      setConflictWarning(null);
+      return;
+    }
+
+    let cancelled = false;
+    setCheckingConflict(true);
+    const params = new URLSearchParams({
+      teacherId,
+      dayOfWeek: form.dayOfWeek,
+      startTime: form.startTime,
+      endTime: form.endTime,
+    });
+    if (editingSlot) params.set('excludeSlotId', editingSlot.id);
+
+    api
+      .get<{ success: boolean; data: { conflict: boolean; message: string | null } }>(
+        `/api/admin/timetable/check-conflict?${params.toString()}`
+      )
+      .then((res) => {
+        if (!cancelled) setConflictWarning(res.data.data.conflict ? res.data.data.message : null);
+      })
+      .catch(() => {
+        if (!cancelled) setConflictWarning(null);
+      })
+      .finally(() => {
+        if (!cancelled) setCheckingConflict(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [form.subjectId, form.dayOfWeek, form.startTime, form.endTime, subjects, editingSlot]);
+
   async function handleDelete(slot: TimetableSlot) {
     setDeletingId(slot.id);
     try {
@@ -181,6 +238,30 @@ export default function TimetablePage() {
       setError('Failed to delete timetable slot.');
     } finally {
       setDeletingId(null);
+    }
+  }
+
+  function openAutoGenDialog() {
+    setAutoGenResult(null);
+    setAutoGenError(null);
+    setAutoGenDialogOpen(true);
+  }
+
+  async function handleAutoGenerate() {
+    setAutoGenSubmitting(true);
+    setAutoGenError(null);
+    try {
+      const res = await api.post<{ success: boolean; data: AutoGenerateResult }>(
+        '/api/admin/timetable/auto-generate',
+        { classId: selectedClassId }
+      );
+      setAutoGenResult(res.data.data);
+      await loadSlots(selectedClassId);
+    } catch (err) {
+      const axiosErr = err as AxiosError<{ error?: string }>;
+      setAutoGenError(axiosErr.response?.data?.error ?? 'Failed to generate timetable.');
+    } finally {
+      setAutoGenSubmitting(false);
     }
   }
 
@@ -201,6 +282,9 @@ export default function TimetablePage() {
               ))}
             </SelectContent>
           </Select>
+          <Button variant="outline" onClick={openAutoGenDialog} disabled={!selectedClassId}>
+            Auto-Generate
+          </Button>
           <Button onClick={openAddDialog} disabled={!selectedClassId}>
             Add Slot
           </Button>
@@ -317,6 +401,11 @@ export default function TimetablePage() {
                   )}
                 </SelectContent>
               </Select>
+              {conflictWarning && (
+                <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-400">
+                  ⚠️ {conflictWarning}
+                </p>
+              )}
             </div>
 
             <div className="space-y-2">
@@ -377,11 +466,73 @@ export default function TimetablePage() {
             )}
 
             <DialogFooter>
-              <Button type="submit" disabled={submitting}>
+              <Button type="submit" disabled={submitting || checkingConflict || Boolean(conflictWarning)}>
                 {submitting ? 'Saving...' : editingSlot ? 'Save Changes' : 'Add Slot'}
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={autoGenDialogOpen} onOpenChange={setAutoGenDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Auto-Generate Timetable
+              {(() => {
+                const c = classes.find((cl) => cl.id === selectedClassId);
+                return c ? ` for ${classLabel(c)}` : '';
+              })()}
+            </DialogTitle>
+          </DialogHeader>
+
+          {autoGenResult ? (
+            <div className="space-y-3">
+              <p className="text-sm text-green-600">
+                ✅ Generated {autoGenResult.created} slot{autoGenResult.created === 1 ? '' : 's'}.
+                {autoGenResult.conflicts.length > 0 && (
+                  <> ⚠️ {autoGenResult.conflicts.length} conflict{autoGenResult.conflicts.length === 1 ? '' : 's'} skipped.</>
+                )}
+              </p>
+              {autoGenResult.conflicts.length > 0 && (
+                <ul className="list-disc space-y-1 pl-4 text-sm text-muted-foreground">
+                  {autoGenResult.conflicts.map((c, i) => (
+                    <li key={i}>
+                      {c.subject}: {c.reason}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <DialogFooter>
+                <Button onClick={() => setAutoGenDialogOpen(false)}>Close</Button>
+              </DialogFooter>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <ul className="space-y-1 text-sm text-muted-foreground">
+                <li>✓ Use your school timing settings</li>
+                <li>✓ Distribute subjects across the week</li>
+                <li>✓ Check for teacher conflicts</li>
+                <li>✓ Replace existing timetable for this class</li>
+              </ul>
+              <p className="rounded-md border border-yellow-200 bg-yellow-50 px-3 py-2 text-sm text-yellow-800 dark:border-yellow-900 dark:bg-yellow-950 dark:text-yellow-400">
+                Warning: This will clear existing slots for this class.
+              </p>
+              {autoGenError && (
+                <p className="text-sm text-destructive" role="alert">
+                  {autoGenError}
+                </p>
+              )}
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setAutoGenDialogOpen(false)}>
+                  Cancel
+                </Button>
+                <Button onClick={handleAutoGenerate} disabled={autoGenSubmitting}>
+                  {autoGenSubmitting ? 'Generating...' : 'Generate Timetable'}
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

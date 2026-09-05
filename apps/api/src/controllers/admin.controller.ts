@@ -774,6 +774,110 @@ export async function createClass(req: AuthRequest, res: Response): Promise<void
   send(res, 201, newClass);
 }
 
+const createClassWithSubjectsSchema = z.object({
+  number: z.number().int().min(1).max(10),
+  section: z.string().min(1),
+  classTeacherId: z.string().optional(),
+  maxStudents: z.number().int().min(1).max(60).optional(),
+  subjects: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        teacherId: z.string().min(1),
+        creditHours: z.number().int().min(1).max(10),
+      })
+    )
+    .optional(),
+});
+
+// POST /api/admin/classes/section — the 3-step "Add Section" wizard's final
+// step: creates the class and every listed subject in one transaction, so a
+// failure partway through never leaves a section with only some subjects.
+export async function createClassWithSubjects(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = createClassWithSubjectsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid class data');
+    return;
+  }
+  const { number, section, classTeacherId, maxStudents, subjects } = parsed.data;
+  const wing = wingForClassNumber(number);
+
+  if (classTeacherId) {
+    const teacher = await prisma.user.findFirst({
+      where: { id: classTeacherId, schoolId, role: { in: ['teacher', 'coordinator'] } },
+    });
+    if (!teacher) {
+      send(res, 400, undefined, 'Class teacher not found in this school');
+      return;
+    }
+  }
+  if (subjects && subjects.length > 0) {
+    const teacherIds = [...new Set(subjects.map((s) => s.teacherId))];
+    const validTeachers = await prisma.user.findMany({
+      where: { id: { in: teacherIds }, schoolId, role: { in: ['teacher', 'coordinator'] } },
+      select: { id: true },
+    });
+    if (validTeachers.length !== teacherIds.length) {
+      send(res, 400, undefined, 'One or more subject teachers were not found in this school');
+      return;
+    }
+  }
+
+  let newClass;
+  try {
+    newClass = await prisma.$transaction(async (tx) => {
+      const created = await tx.class.create({
+        data: {
+          number,
+          section,
+          wing,
+          classTeacherId,
+          maxStudents: maxStudents ?? 30,
+          schoolId,
+        },
+      });
+
+      if (subjects && subjects.length > 0) {
+        await tx.subject.createMany({
+          data: subjects.map((s) => ({
+            name: s.name,
+            teacherId: s.teacherId,
+            creditHours: s.creditHours,
+            classId: created.id,
+          })),
+        });
+      }
+
+      return created;
+    });
+  } catch (err) {
+    if (isUniqueConstraintError(err)) {
+      send(res, 400, undefined, 'A section with this class number and letter already exists');
+      return;
+    }
+    throw err;
+  }
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'CREATE_CLASS_WITH_SUBJECTS',
+    targetTable: 'Class',
+    targetId: newClass.id,
+    meta: { number, section, wing, classTeacherId, subjectCount: subjects?.length ?? 0 },
+    ip: req.ip,
+  });
+
+  const withSubjects = await prisma.class.findUnique({
+    where: { id: newClass.id },
+    include: { subjects: true, _count: { select: { studentProfiles: true, subjects: true } } },
+  });
+
+  send(res, 201, withSubjects);
+}
+
 const updateClassSchema = z.object({
   number: z.number().int().min(1).max(10).optional(),
   section: z.string().min(1).optional(),
@@ -1036,7 +1140,10 @@ async function findTimetableConflict(params: {
       dayOfWeek,
       ...(excludeSlotId ? { id: { not: excludeSlotId } } : {}),
     },
-    include: { subject: { select: { teacherId: true, name: true } } },
+    include: {
+      subject: { select: { teacherId: true, name: true, teacher: { select: { name: true } } } },
+      class: { select: { number: true, section: true } },
+    },
   });
 
   return candidates.find((slot) => {
@@ -1124,7 +1231,12 @@ export async function upsertTimetableSlot(req: AuthRequest, res: Response): Prom
     excludeSlotId: id,
   });
   if (conflict) {
-    send(res, 409, undefined, `Conflicts with an existing slot (${conflict.subject.name})`);
+    send(
+      res,
+      409,
+      undefined,
+      `${conflict.subject.teacher.name} already teaches ${conflict.subject.name} in Class ${conflict.class.number}-${conflict.class.section} at this time. Choose a different time.`
+    );
     return;
   }
 
@@ -1201,6 +1313,9 @@ export async function checkTimetableConflict(req: AuthRequest, res: Response): P
 
   send(res, 200, {
     conflict: Boolean(conflict),
+    message: conflict
+      ? `${conflict.subject.teacher.name} already teaches ${conflict.subject.name} in Class ${conflict.class.number}-${conflict.class.section} at this time. Choose a different time.`
+      : null,
     slot: conflict ?? null,
   });
 }
@@ -2831,4 +2946,294 @@ export async function reviewStaffLeave(req: AuthRequest, res: Response): Promise
   }
 
   send(res, 200, updated);
+}
+
+// ---------------------------------------------------------------
+// GET /api/admin/school-settings/timetable
+// PATCH /api/admin/school-settings/timetable
+// ---------------------------------------------------------------
+
+const timetableSettingsSelect = {
+  schoolStartTime: true,
+  schoolEndTime: true,
+  periodDuration: true,
+  breakStartTime: true,
+  breakDuration: true,
+  workingDays: true,
+} as const;
+
+export async function getTimetableSettings(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const settings = await prisma.schoolSettings.findUnique({
+    where: { schoolId },
+    select: timetableSettingsSelect,
+  });
+
+  send(
+    res,
+    200,
+    settings ?? {
+      schoolStartTime: '08:00',
+      schoolEndTime: '14:00',
+      periodDuration: 45,
+      breakStartTime: '10:30',
+      breakDuration: 20,
+      workingDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+    }
+  );
+}
+
+const WORKING_DAY_VALUES = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as const;
+
+const timetableSettingsSchema = z.object({
+  schoolStartTime: z.string().regex(/^\d{2}:\d{2}$/),
+  schoolEndTime: z.string().regex(/^\d{2}:\d{2}$/),
+  periodDuration: z.number().int().min(15).max(120),
+  breakStartTime: z.string().regex(/^\d{2}:\d{2}$/),
+  breakDuration: z.number().int().min(0).max(120),
+  workingDays: z.array(z.enum(WORKING_DAY_VALUES)).min(1),
+});
+
+export async function updateTimetableSettings(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = timetableSettingsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid timetable settings');
+    return;
+  }
+  const { schoolStartTime, schoolEndTime } = parsed.data;
+  if (schoolEndTime <= schoolStartTime) {
+    send(res, 400, undefined, 'School end time must be after start time');
+    return;
+  }
+
+  const settings = await prisma.schoolSettings.upsert({
+    where: { schoolId },
+    create: { schoolId, ...parsed.data },
+    update: parsed.data,
+    select: timetableSettingsSelect,
+  });
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'TIMETABLE_SETTINGS_UPDATE',
+    targetTable: 'SchoolSettings',
+    meta: parsed.data,
+    ip: req.ip,
+  });
+
+  send(res, 200, settings);
+}
+
+// =================================================================
+// Auto-generate timetable
+// =================================================================
+
+function timeToMinutes(time: string): number {
+  const [h, m] = time.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function minutesToTime(mins: number): string {
+  const h = Math.floor(mins / 60) % 24;
+  const m = mins % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+const DAY_NAME_TO_INDEX: Record<string, number> = {
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+};
+
+/** Builds the list of period time-ranges for one day, skipping the break. */
+function buildDailyPeriods(settings: {
+  schoolStartTime: string;
+  schoolEndTime: string;
+  periodDuration: number;
+  breakStartTime: string;
+  breakDuration: number;
+}): { startTime: string; endTime: string }[] {
+  const dayStart = timeToMinutes(settings.schoolStartTime);
+  const dayEnd = timeToMinutes(settings.schoolEndTime);
+  const breakStart = timeToMinutes(settings.breakStartTime);
+  const breakEnd = breakStart + settings.breakDuration;
+
+  const periods: { startTime: string; endTime: string }[] = [];
+  let cursor = dayStart;
+  while (cursor + settings.periodDuration <= dayEnd) {
+    const periodEnd = cursor + settings.periodDuration;
+    // Skip straight over the break window rather than carving a period out of it.
+    if (cursor < breakEnd && periodEnd > breakStart) {
+      cursor = breakEnd;
+      continue;
+    }
+    periods.push({ startTime: minutesToTime(cursor), endTime: minutesToTime(periodEnd) });
+    cursor = periodEnd;
+  }
+  return periods;
+}
+
+const autoGenerateSchema = z.object({
+  classId: z.string().min(1),
+});
+
+export async function autoGenerateTimetable(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = autoGenerateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid request');
+    return;
+  }
+  const { classId } = parsed.data;
+
+  const targetClass = await prisma.class.findFirst({ where: { id: classId, schoolId } });
+  if (!targetClass) {
+    send(res, 404, undefined, 'Class not found');
+    return;
+  }
+
+  const [settings, subjects] = await Promise.all([
+    prisma.schoolSettings.findUnique({ where: { schoolId }, select: timetableSettingsSelect }),
+    prisma.subject.findMany({ where: { classId, isActive: true } }),
+  ]);
+
+  const effectiveSettings = settings ?? {
+    schoolStartTime: '08:00',
+    schoolEndTime: '14:00',
+    periodDuration: 45,
+    breakStartTime: '10:30',
+    breakDuration: 20,
+    workingDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+  };
+
+  if (subjects.length === 0) {
+    send(res, 400, undefined, 'This class has no subjects yet — add subjects before generating a timetable.');
+    return;
+  }
+
+  const workingDayIndices = effectiveSettings.workingDays
+    .map((d) => DAY_NAME_TO_INDEX[d])
+    .filter((d): d is number => d !== undefined)
+    .sort((a, b) => a - b);
+  const dailyPeriods = buildDailyPeriods(effectiveSettings);
+
+  if (workingDayIndices.length === 0 || dailyPeriods.length === 0) {
+    send(res, 400, undefined, 'No valid periods could be generated from the current school timing settings.');
+    return;
+  }
+
+  // Build the full week's empty slot grid: one entry per (day, period).
+  const grid: { dayOfWeek: number; startTime: string; endTime: string }[] = [];
+  for (const day of workingDayIndices) {
+    for (const period of dailyPeriods) {
+      grid.push({ dayOfWeek: day, ...period });
+    }
+  }
+
+  // Queue: each subject appears `creditHours` times, spread as evenly as
+  // possible across days rather than stacked on one day.
+  type QueueItem = { subjectId: string; teacherId: string; name: string };
+  const queue: QueueItem[] = [];
+  const maxRounds = Math.max(...subjects.map((s) => s.creditHours), 1);
+  for (let round = 0; round < maxRounds; round++) {
+    for (const s of subjects) {
+      if (round < s.creditHours) {
+        queue.push({ subjectId: s.id, teacherId: s.teacherId, name: s.name });
+      }
+    }
+  }
+
+  // Existing slots for every OTHER class in the school — used to detect
+  // teacher double-booking across the whole school, not just this class.
+  const otherSlots = await prisma.timetableSlot.findMany({
+    where: { schoolId, classId: { not: classId } },
+    include: { subject: { select: { teacherId: true } }, class: { select: { number: true, section: true } } },
+  });
+
+  const placed: { dayOfWeek: number; startTime: string; endTime: string; subjectId: string; teacherId: string }[] =
+    [];
+  const skipped: { subject: string; reason: string }[] = [];
+  const usedSlotIndices = new Set<number>();
+  const usedByDaySubject = new Set<string>(); // `${day}-${subjectId}` — avoid same subject twice same day
+
+  for (const item of queue) {
+    let placedThisItem = false;
+
+    for (let i = 0; i < grid.length; i++) {
+      if (usedSlotIndices.has(i)) continue;
+      const cell = grid[i];
+      const dayKey = `${cell.dayOfWeek}-${item.subjectId}`;
+      if (usedByDaySubject.has(dayKey)) continue;
+
+      const teacherBusyElsewhere = otherSlots.some(
+        (s) =>
+          s.dayOfWeek === cell.dayOfWeek &&
+          s.subject.teacherId === item.teacherId &&
+          s.startTime < cell.endTime &&
+          s.endTime > cell.startTime
+      );
+      const teacherBusyThisRun = placed.some(
+        (s) =>
+          s.dayOfWeek === cell.dayOfWeek &&
+          s.teacherId === item.teacherId &&
+          s.startTime < cell.endTime &&
+          s.endTime > cell.startTime
+      );
+      if (teacherBusyElsewhere || teacherBusyThisRun) continue;
+
+      usedSlotIndices.add(i);
+      usedByDaySubject.add(dayKey);
+      placed.push({
+        dayOfWeek: cell.dayOfWeek,
+        startTime: cell.startTime,
+        endTime: cell.endTime,
+        subjectId: item.subjectId,
+        teacherId: item.teacherId,
+      });
+      placedThisItem = true;
+      break;
+    }
+
+    if (!placedThisItem) {
+      skipped.push({ subject: item.name, reason: 'No conflict-free slot available' });
+    }
+  }
+
+  await prisma.$transaction([
+    prisma.timetableSlot.deleteMany({ where: { classId } }),
+    ...placed.map((p) =>
+      prisma.timetableSlot.create({
+        data: {
+          schoolId,
+          classId,
+          subjectId: p.subjectId,
+          dayOfWeek: p.dayOfWeek,
+          startTime: p.startTime,
+          endTime: p.endTime,
+        },
+      })
+    ),
+  ]);
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'TIMETABLE_AUTO_GENERATE',
+    targetTable: 'Class',
+    targetId: classId,
+    meta: { created: placed.length, skipped: skipped.length },
+    ip: req.ip,
+  });
+
+  send(res, 200, { created: placed.length, conflicts: skipped });
 }

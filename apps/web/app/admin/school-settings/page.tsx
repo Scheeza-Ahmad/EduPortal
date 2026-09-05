@@ -9,6 +9,7 @@ import { ErrorState } from '@/components/shared/ErrorState';
 import { BrandingEditor, BrandingFormData, EMPTY_BRANDING_FORM } from '@/components/branding/BrandingEditor';
 import { FeaturesEditor } from '@/components/features/FeaturesEditor';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { TimetableSettingsTab } from '@/components/school-settings/TimetableSettingsTab';
 
 function getErrorMessage(err: unknown, fallback: string): string {
   const axiosErr = err as AxiosError<{ error?: string }>;
@@ -131,6 +132,7 @@ export default function SchoolSettingsPage() {
           <TabsList>
             <TabsTrigger value="branding">Branding</TabsTrigger>
             <TabsTrigger value="features">Features</TabsTrigger>
+            <TabsTrigger value="timetable">Timetable Settings</TabsTrigger>
           </TabsList>
 
           <TabsContent value="branding" className="pt-4">
@@ -148,6 +150,10 @@ export default function SchoolSettingsPage() {
                 </p>
               </>
             )}
+          </TabsContent>
+
+          <TabsContent value="timetable" className="pt-4">
+            <TimetableSettingsTab />
           </TabsContent>
         </Tabs>
       ) : null}

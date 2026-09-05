@@ -76,6 +76,29 @@ interface SectionForm {
   maxStudents: string;
 }
 
+interface SubjectRow {
+  name: string;
+  teacherId: string;
+  creditHours: string;
+}
+
+const JUNIOR_SUBJECT_SUGGESTIONS = ['Urdu', 'English', 'Mathematics', 'Islamiat', 'General Knowledge'];
+const SENIOR_SUBJECT_SUGGESTIONS = [
+  'Urdu',
+  'English',
+  'Mathematics',
+  'Physics',
+  'Chemistry',
+  'Biology',
+  'Computer Science',
+  'Islamiat',
+];
+
+function emptySubjectRows(wing: 'junior' | 'senior'): SubjectRow[] {
+  const suggestions = wing === 'junior' ? JUNIOR_SUBJECT_SUGGESTIONS : SENIOR_SUBJECT_SUGGESTIONS;
+  return suggestions.map((name) => ({ name, teacherId: '', creditHours: '3' }));
+}
+
 interface StudentForm {
   name: string;
   email: string;
@@ -165,6 +188,11 @@ export default function StudentsClassesPage() {
   const [sectionFormError, setSectionFormError] = useState<string | null>(null);
   const [sectionSubmitting, setSectionSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Add-section wizard (3 steps) — editing an existing section stays a
+  // single simple form, only creation goes through the wizard.
+  const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1);
+  const [subjectRows, setSubjectRows] = useState<SubjectRow[]>([]);
 
   // Inline student roster per expanded section
   const [expandedSectionId, setExpandedSectionId] = useState<string | null>(null);
@@ -272,6 +300,8 @@ export default function StudentsClassesPage() {
     setEditingSection(null);
     setSectionForm({ number: String(number), section: 'A', classTeacherId: '', maxStudents: '30' });
     setSectionFormError(null);
+    setWizardStep(1);
+    setSubjectRows(emptySubjectRows(activeWing));
     setSectionDialogOpen(true);
   }
 
@@ -299,10 +329,17 @@ export default function StudentsClassesPage() {
           maxStudents: Number(sectionForm.maxStudents),
         });
       } else {
-        await api.post('/api/admin/classes', {
+        const usableSubjects = subjectRows.filter((r) => r.name.trim() && r.teacherId);
+        await api.post('/api/admin/classes/section', {
           number: Number(sectionForm.number),
           section: sectionForm.section,
           classTeacherId: sectionForm.classTeacherId || undefined,
+          maxStudents: Number(sectionForm.maxStudents) || 30,
+          subjects: usableSubjects.map((r) => ({
+            name: r.name.trim(),
+            teacherId: r.teacherId,
+            creditHours: Number(r.creditHours) || 1,
+          })),
         });
       }
       setSectionDialogOpen(false);
@@ -312,6 +349,18 @@ export default function StudentsClassesPage() {
     } finally {
       setSectionSubmitting(false);
     }
+  }
+
+  function addSubjectRow() {
+    setSubjectRows((rows) => [...rows, { name: '', teacherId: '', creditHours: '3' }]);
+  }
+
+  function updateSubjectRow(index: number, patch: Partial<SubjectRow>) {
+    setSubjectRows((rows) => rows.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  }
+
+  function removeSubjectRow(index: number) {
+    setSubjectRows((rows) => rows.filter((_, i) => i !== index));
   }
 
   async function handleDeleteSection(section: ClassSection) {
@@ -631,82 +680,66 @@ export default function StudentsClassesPage() {
         </Tabs>
       )}
 
-      {/* Add / Edit Section */}
-      <Dialog open={sectionDialogOpen} onOpenChange={setSectionDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{editingSection ? 'Edit Section' : 'Add Section'}</DialogTitle>
-          </DialogHeader>
+      {/* Edit Section — unchanged simple single-step form */}
+      {editingSection && (
+        <Dialog open={sectionDialogOpen} onOpenChange={setSectionDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Edit Section</DialogTitle>
+            </DialogHeader>
 
-          <form onSubmit={handleSectionSubmit} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <form onSubmit={handleSectionSubmit} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Class Number</Label>
+                  <Select value={sectionForm.number} disabled>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Number" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={sectionForm.number}>{sectionForm.number}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Section</Label>
+                  <Select value={sectionForm.section} disabled>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={sectionForm.section}>{sectionForm.section}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
               <div className="space-y-2">
-                <Label>Class Number</Label>
+                <Label>Class Teacher (optional)</Label>
                 <Select
-                  value={sectionForm.number}
-                  onValueChange={(v) => setSectionForm((f) => ({ ...f, number: v }))}
-                  disabled={Boolean(editingSection)}
+                  value={sectionForm.classTeacherId || 'none'}
+                  onValueChange={(v) =>
+                    setSectionForm((f) => ({ ...f, classTeacherId: v === 'none' ? '' : v }))
+                  }
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Number" />
+                    <SelectValue placeholder="Select a teacher" />
                   </SelectTrigger>
                   <SelectContent>
-                    {(activeWing === 'junior' ? JUNIOR_NUMBERS : SENIOR_NUMBERS).map((n) => (
-                      <SelectItem key={n} value={String(n)}>
-                        {n}
+                    <SelectItem value="none">None</SelectItem>
+                    {teachersForWing(activeWing).map((t) => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                {teachersForWing(activeWing).length === 0 && (
+                  <p className="text-xs text-muted-foreground">No teachers assigned to this wing yet.</p>
+                )}
               </div>
 
-              <div className="space-y-2">
-                <Label>Section</Label>
-                <Select
-                  value={sectionForm.section}
-                  onValueChange={(v) => setSectionForm((f) => ({ ...f, section: v as 'A' | 'B' | 'C' }))}
-                  disabled={Boolean(editingSection)}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {SECTION_LETTERS.map((letter) => (
-                      <SelectItem key={letter} value={letter}>
-                        {letter}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Class Teacher (optional)</Label>
-              <Select
-                value={sectionForm.classTeacherId || 'none'}
-                onValueChange={(v) =>
-                  setSectionForm((f) => ({ ...f, classTeacherId: v === 'none' ? '' : v }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a teacher" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">None</SelectItem>
-                  {teachersForWing(activeWing).map((t) => (
-                    <SelectItem key={t.id} value={t.id}>
-                      {t.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {teachersForWing(activeWing).length === 0 && (
-                <p className="text-xs text-muted-foreground">No teachers assigned to this wing yet.</p>
-              )}
-            </div>
-
-            {editingSection && (
               <div className="space-y-2">
                 <Label htmlFor="max-students">Maximum students allowed in this section</Label>
                 <Input
@@ -723,22 +756,244 @@ export default function StudentsClassesPage() {
                   this number.
                 </p>
               </div>
+
+              {sectionFormError && (
+                <p className="text-sm text-destructive" role="alert">
+                  {sectionFormError}
+                </p>
+              )}
+
+              <DialogFooter>
+                <Button type="submit" disabled={sectionSubmitting}>
+                  {sectionSubmitting ? 'Saving...' : 'Save Changes'}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Add Section — 3-step wizard: Basic Info -> Subjects -> Review */}
+      {!editingSection && (
+        <Dialog open={sectionDialogOpen} onOpenChange={setSectionDialogOpen}>
+          <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>
+                Add Section — Step {wizardStep} of 3:{' '}
+                {wizardStep === 1 ? 'Basic Info' : wizardStep === 2 ? 'Subjects' : 'Review & Create'}
+              </DialogTitle>
+            </DialogHeader>
+
+            {wizardStep === 1 && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Class Number</Label>
+                    <Select
+                      value={sectionForm.number}
+                      onValueChange={(v) => setSectionForm((f) => ({ ...f, number: v }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Number" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(activeWing === 'junior' ? JUNIOR_NUMBERS : SENIOR_NUMBERS).map((n) => (
+                          <SelectItem key={n} value={String(n)}>
+                            {n}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Section</Label>
+                    <Select
+                      value={sectionForm.section}
+                      onValueChange={(v) => setSectionForm((f) => ({ ...f, section: v as 'A' | 'B' | 'C' }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {SECTION_LETTERS.map((letter) => (
+                          <SelectItem key={letter} value={letter}>
+                            {letter}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Class Teacher (optional)</Label>
+                  <Select
+                    value={sectionForm.classTeacherId || 'none'}
+                    onValueChange={(v) =>
+                      setSectionForm((f) => ({ ...f, classTeacherId: v === 'none' ? '' : v }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a teacher" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">None</SelectItem>
+                      {teachersForWing(activeWing).map((t) => (
+                        <SelectItem key={t.id} value={t.id}>
+                          {t.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {teachersForWing(activeWing).length === 0 && (
+                    <p className="text-xs text-muted-foreground">No teachers assigned to this wing yet.</p>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="new-max-students">Max Students</Label>
+                  <Input
+                    id="new-max-students"
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={sectionForm.maxStudents}
+                    onChange={(e) => setSectionForm((f) => ({ ...f, maxStudents: e.target.value }))}
+                  />
+                </div>
+
+                <DialogFooter>
+                  <Button type="button" onClick={() => setWizardStep(2)}>
+                    Next →
+                  </Button>
+                </DialogFooter>
+              </div>
             )}
 
-            {sectionFormError && (
-              <p className="text-sm text-destructive" role="alert">
-                {sectionFormError}
-              </p>
+            {wizardStep === 2 && (
+              <div className="space-y-4">
+                <div>
+                  <p className="text-sm font-medium">
+                    Add subjects for Class {sectionForm.number} - {sectionForm.section}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    These subjects will be created for this section. All sections of Class{' '}
+                    {sectionForm.number} will share these subject names — you can assign different
+                    teachers per section.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  {subjectRows.map((row, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <Input
+                        placeholder="Subject Name"
+                        value={row.name}
+                        onChange={(e) => updateSubjectRow(i, { name: e.target.value })}
+                        className="flex-1"
+                      />
+                      <Select
+                        value={row.teacherId || 'none'}
+                        onValueChange={(v) => updateSubjectRow(i, { teacherId: v === 'none' ? '' : v })}
+                      >
+                        <SelectTrigger className="w-[160px] shrink-0">
+                          <SelectValue placeholder="Teacher" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">Select teacher</SelectItem>
+                          {teachersForWing(activeWing).map((t) => (
+                            <SelectItem key={t.id} value={t.id}>
+                              {t.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={row.creditHours}
+                        onChange={(e) => updateSubjectRow(i, { creditHours: e.target.value })}
+                        className="w-16 shrink-0"
+                        title="Credit hours"
+                      />
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => removeSubjectRow(i)}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+
+                <Button type="button" variant="outline" size="sm" onClick={addSubjectRow}>
+                  + Add Subject
+                </Button>
+
+                <DialogFooter className="gap-2">
+                  <Button type="button" variant="outline" onClick={() => setWizardStep(1)}>
+                    ← Back
+                  </Button>
+                  <Button type="button" onClick={() => setWizardStep(3)}>
+                    Next →
+                  </Button>
+                </DialogFooter>
+              </div>
             )}
 
-            <DialogFooter>
-              <Button type="submit" disabled={sectionSubmitting}>
-                {sectionSubmitting ? 'Saving...' : editingSection ? 'Save Changes' : 'Create Section'}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+            {wizardStep === 3 && (
+              <form onSubmit={handleSectionSubmit} className="space-y-4">
+                <div className="space-y-2 rounded-md border p-3 text-sm">
+                  <p>
+                    <span className="text-muted-foreground">Section: </span>
+                    Class {sectionForm.number} - {sectionForm.section}
+                  </p>
+                  <p>
+                    <span className="text-muted-foreground">Class Teacher: </span>
+                    {sectionForm.classTeacherId ? teacherName(sectionForm.classTeacherId) : 'None'}
+                  </p>
+                  <p>
+                    <span className="text-muted-foreground">Max Students: </span>
+                    {sectionForm.maxStudents || 30}
+                  </p>
+                  <div>
+                    <span className="text-muted-foreground">Subjects: </span>
+                    {subjectRows.filter((r) => r.name.trim() && r.teacherId).length === 0 ? (
+                      <span>None</span>
+                    ) : (
+                      <span>
+                        {subjectRows
+                          .filter((r) => r.name.trim() && r.teacherId)
+                          .map((r) => `${r.name} (${teacherName(r.teacherId)})`)
+                          .join(', ')}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {sectionFormError && (
+                  <p className="text-sm text-destructive" role="alert">
+                    {sectionFormError}
+                  </p>
+                )}
+
+                <DialogFooter className="gap-2">
+                  <Button type="button" variant="outline" onClick={() => setWizardStep(2)}>
+                    ← Back
+                  </Button>
+                  <Button type="submit" disabled={sectionSubmitting}>
+                    {sectionSubmitting ? 'Creating...' : 'Create Section & Subjects'}
+                  </Button>
+                </DialogFooter>
+              </form>
+            )}
+          </DialogContent>
+        </Dialog>
+      )}
 
       {/* Add / Edit Student */}
       <Dialog open={studentDialogOpen} onOpenChange={setStudentDialogOpen}>

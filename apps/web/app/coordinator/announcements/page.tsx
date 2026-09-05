@@ -9,6 +9,15 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+
+type Audience = 'wing_teachers' | 'wing_students' | 'school_wide';
 
 interface Announcement {
   id: string;
@@ -31,6 +40,7 @@ export default function CoordinatorAnnouncementsPage() {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [targetWing, setTargetWing] = useState(true);
+  const [audience, setAudience] = useState<Audience>('wing_students');
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -59,7 +69,12 @@ export default function CoordinatorAnnouncementsPage() {
     setFormError(null);
     setSubmitting(true);
     try {
-      await api.post('/api/coordinator/announcements', { title, body, targetWing });
+      await api.post('/api/coordinator/announcements', {
+        title,
+        body,
+        targetWing,
+        audience: targetWing ? audience : 'school_wide',
+      });
       setTitle('');
       setBody('');
       await loadAnnouncements();
@@ -104,6 +119,22 @@ export default function CoordinatorAnnouncementsPage() {
               <Switch checked={targetWing} onCheckedChange={setTargetWing} />
               <Label className="!mt-0">Post to entire wing</Label>
             </div>
+
+            {targetWing && (
+              <div className="space-y-2">
+                <Label>Audience</Label>
+                <Select value={audience} onValueChange={(v) => setAudience(v as Audience)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="wing_teachers">Wing teachers only</SelectItem>
+                    <SelectItem value="wing_students">All wing students</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
             <p className="text-xs text-muted-foreground">
               {targetWing
                 ? 'This will post to every class in your wing.'
