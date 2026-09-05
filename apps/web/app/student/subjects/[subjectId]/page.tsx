@@ -72,6 +72,22 @@ function getErrorMessage(err: unknown, fallback: string): string {
   return axiosErr.response?.data?.error ?? fallback;
 }
 
+/** Per-activity status the student actually cares about — distinct from the
+ * raw pending/submitted/late tri-state, since "not submitted" reads very
+ * differently depending on whether the due date has already passed. */
+function activityDisplayStatus(activity: Activity): { label: string; className: string } {
+  if (activity.mySubmission?.grade) {
+    return { label: `${activity.mySubmission.grade.marks} / ${activity.totalMarks}`, className: 'font-medium text-green-600' };
+  }
+  if (activity.mySubmission) {
+    return { label: 'Submitted — Awaiting Grade', className: 'text-orange-700 dark:text-orange-400' };
+  }
+  if (new Date(activity.dueDate) < new Date()) {
+    return { label: 'Missed', className: 'font-medium text-red-600' };
+  }
+  return { label: 'Pending', className: 'text-muted-foreground' };
+}
+
 export default function StudentSubjectPage() {
   const params = useParams<{ subjectId: string }>();
   const subjectId = params.subjectId;
@@ -211,9 +227,19 @@ export default function StudentSubjectPage() {
                             </div>
                           </TableCell>
                           <TableCell>
-                            {activity.mySubmission?.grade
-                              ? `${activity.mySubmission.grade.marks} / ${activity.totalMarks}`
-                              : '—'}
+                            {(() => {
+                              const display = activityDisplayStatus(activity);
+                              return (
+                                <div>
+                                  <span className={display.className}>{display.label}</span>
+                                  {activity.mySubmission?.grade?.feedback && (
+                                    <p className="mt-0.5 text-xs text-muted-foreground">
+                                      {activity.mySubmission.grade.feedback}
+                                    </p>
+                                  )}
+                                </div>
+                              );
+                            })()}
                           </TableCell>
                           <TableCell className="text-right">
                             {activity.status === 'pending' ? (

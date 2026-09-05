@@ -4,6 +4,7 @@ import { ReactNode, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { Bell, Loader2, Menu, X } from 'lucide-react';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
@@ -22,7 +23,6 @@ const NAV_ITEMS: { href: string; key: TranslationKey; icon?: string; feature?: k
   { href: '/student/grades', key: 'grades' },
   { href: '/student/attendance', key: 'attendance', feature: 'featureAttendance' },
   { href: '/student/fees', key: 'fees', feature: 'featureFinance' },
-  { href: '/student/leave-request', key: 'leave', feature: 'featureLeaveRequests' },
   { href: '/student/badges', key: 'badges', feature: 'featureBadges' },
   { href: '/student/insights', key: 'insights', icon: '🤖', feature: 'featureAiInsights' },
   { href: '/student/notifications', key: 'notifications' },
@@ -66,6 +66,49 @@ export default function StudentLayout({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, [accessToken, pathname]);
+
+  // New-activity popups — checked on mount and every 5 minutes. Marking a
+  // notification read the moment its toast is shown (rather than waiting for
+  // dismiss) keeps this idempotent: the next poll's `unread=true` filter
+  // naturally excludes it, so it's never shown twice.
+  useEffect(() => {
+    if (!accessToken) return;
+
+    async function checkNewActivityToasts() {
+      try {
+        const res = await api.get<{
+          success: boolean;
+          data: { notifications: { id: string; type: string; message: string }[] };
+        }>('/api/student/notifications', { params: { unread: 'true' } });
+
+        const activityNotifications = res.data.data.notifications.filter(
+          (n) => n.type === 'ACTIVITY_PUBLISHED'
+        );
+
+        for (const n of activityNotifications) {
+          toast('📝 New Activity Posted', {
+            description: n.message,
+            duration: 8000,
+            action: {
+              label: 'View Activity',
+              onClick: () => router.push('/student/activities'),
+            },
+          });
+          api.patch(`/api/student/notifications/${n.id}/read`).catch(() => {});
+        }
+
+        if (activityNotifications.length > 0) {
+          setUnreadCount((c) => Math.max(0, c - activityNotifications.length));
+        }
+      } catch {
+        // ignore — the notification bell/page still show these if this poll fails
+      }
+    }
+
+    checkNewActivityToasts();
+    const interval = setInterval(checkNewActivityToasts, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [accessToken, router]);
 
   useEffect(() => {
     // Access token lives in memory only, so it's gone after a page refresh.

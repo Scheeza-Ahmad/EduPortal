@@ -432,7 +432,18 @@ export async function getAttendance(req: AuthRequest, res: Response): Promise<vo
   const overallPercentage =
     monthRecords.length > 0 ? Math.round((totalPresent / monthRecords.length) * 1000) / 10 : 0;
 
-  send(res, 200, { perSubject, overallPercentage });
+  // De-duplicated by date (not per-subject) — the donut chart on the
+  // dashboard shows "how many days were what", not raw per-subject rows.
+  const byDate = new Map<string, string>();
+  for (const r of monthRecords) {
+    byDate.set(r.date.toISOString().slice(0, 10), r.status);
+  }
+  const statusCounts = { present: 0, absent: 0, late: 0, leave: 0, half_day: 0 };
+  for (const status of byDate.values()) {
+    if (status in statusCounts) statusCounts[status as keyof typeof statusCounts] += 1;
+  }
+
+  send(res, 200, { perSubject, overallPercentage, statusCounts });
 }
 
 // =================================================================
@@ -441,9 +452,10 @@ export async function getAttendance(req: AuthRequest, res: Response): Promise<vo
 
 export async function getNotifications(req: AuthRequest, res: Response): Promise<void> {
   const userId = req.user!.userId;
+  const unreadOnly = req.query.unread === 'true';
 
   const notifications = await prisma.notification.findMany({
-    where: { userId },
+    where: { userId, ...(unreadOnly ? { isRead: false } : {}) },
     orderBy: { createdAt: 'desc' },
   });
 

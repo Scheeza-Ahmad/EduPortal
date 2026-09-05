@@ -53,6 +53,9 @@ export const translations = {
   classFees: { en: 'Class Fees', ur: 'کلاس فیس' },
   reportCard: { en: 'Report Card', ur: 'رپورٹ کارڈ' },
   leave: { en: 'Leave', ur: 'رخصت' },
+  myLeave: { en: 'My Leave', ur: 'میری رخصت' },
+  staffLeaves: { en: 'Staff Leaves', ur: 'عملے کی رخصتیں' },
+  teacherLeaves: { en: 'Teacher Leaves', ur: 'اساتذہ کی رخصتیں' },
 
   // Actions
   add: { en: 'Add', ur: 'شامل کریں' },

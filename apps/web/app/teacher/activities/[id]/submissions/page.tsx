@@ -250,9 +250,13 @@ export default function ActivitySubmissionsPage() {
                       </TableCell>
                       <TableCell>
                         {submission.grade ? (
-                          `${submission.grade.marks} / ${activity?.totalMarks ?? '?'}`
+                          <span className="font-medium text-green-600">
+                            {submission.grade.marks} / {activity?.totalMarks ?? '?'}
+                          </span>
                         ) : (
-                          <span className="text-muted-foreground">Ungraded</span>
+                          <Badge variant="outline" className="border-orange-300 text-orange-700 dark:border-orange-800 dark:text-orange-400">
+                            Ungraded
+                          </Badge>
                         )}
                       </TableCell>
                       <TableCell className="max-w-[160px] truncate text-muted-foreground">

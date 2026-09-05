@@ -41,6 +41,7 @@ import {
   getReportCard,
   getSchoolBrandingSelf,
   getSchoolFeaturesSelf,
+  getStaffLeaves,
   getStats,
   getStatsTrend,
   getStudents,
@@ -56,6 +57,7 @@ import {
   updateClass,
   updateFinanceUser,
   updateSchoolBrandingSelf,
+  reviewStaffLeave,
   updateStudent,
   updateSubject,
   updateTeacher,
@@ -160,5 +162,9 @@ router.patch('/school-settings/branding', updateSchoolBrandingSelf);
 
 // School features — read-only for school_admin; only super admin can change these
 router.get('/school-settings/features', getSchoolFeaturesSelf);
+
+// Staff leaves — teacher leaves reviewed by coordinators + coordinators' own leave
+router.get('/staff-leaves', getStaffLeaves);
+router.patch('/staff-leaves/:id/review', reviewStaffLeave);
 
 export default router;

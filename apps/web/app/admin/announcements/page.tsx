@@ -43,13 +43,33 @@ interface Announcement {
   author: { id: string; name: string };
 }
 
+type Audience =
+  | 'all_students'
+  | 'all_teachers'
+  | 'class_teachers_only'
+  | 'subject_teachers_only'
+  | 'all_staff'
+  | 'school_wide'
+  | 'specific_class';
+
+const AUDIENCE_OPTIONS: { value: Audience; label: string }[] = [
+  { value: 'school_wide', label: 'School-wide (everyone)' },
+  { value: 'all_students', label: 'All students' },
+  { value: 'all_teachers', label: 'All teachers' },
+  { value: 'class_teachers_only', label: 'Class teachers only' },
+  { value: 'subject_teachers_only', label: 'Subject teachers only' },
+  { value: 'all_staff', label: 'All staff (teachers + coordinators + finance)' },
+  { value: 'specific_class', label: 'Specific class' },
+];
+
 interface AnnouncementForm {
   title: string;
   body: string;
-  classId: string; // '' = school-wide
+  classId: string; // '' = school-wide, only meaningful when audience === 'specific_class'
+  audience: Audience;
 }
 
-const EMPTY_FORM: AnnouncementForm = { title: '', body: '', classId: '' };
+const EMPTY_FORM: AnnouncementForm = { title: '', body: '', classId: '', audience: 'school_wide' };
 
 export default function AnnouncementsPage() {
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
@@ -119,7 +139,8 @@ export default function AnnouncementsPage() {
       await api.post('/api/admin/announcements', {
         title: form.title,
         body: form.body,
-        classId: form.classId || undefined,
+        classId: form.audience === 'specific_class' ? form.classId || undefined : undefined,
+        audience: form.audience,
       });
       setDialogOpen(false);
       await loadAnnouncements();
@@ -245,24 +266,39 @@ export default function AnnouncementsPage() {
             <div className="space-y-2">
               <Label>Audience</Label>
               <Select
-                value={form.classId || 'school-wide'}
-                onValueChange={(v) =>
-                  setForm((f) => ({ ...f, classId: v === 'school-wide' ? '' : v }))
-                }
+                value={form.audience}
+                onValueChange={(v) => setForm((f) => ({ ...f, audience: v as Audience }))}
               >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="school-wide">School-wide</SelectItem>
-                  {classes.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {classOptionLabel(c)}
+                  {AUDIENCE_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
+
+            {form.audience === 'specific_class' && (
+              <div className="space-y-2">
+                <Label>Class</Label>
+                <Select value={form.classId} onValueChange={(v) => setForm((f) => ({ ...f, classId: v }))}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a class" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {classes.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {classOptionLabel(c)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             {formError && (
               <p className="text-sm text-destructive" role="alert">

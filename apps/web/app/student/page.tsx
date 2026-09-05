@@ -2,11 +2,29 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
 import { api } from '@/lib/api';
+import { CHART_COLORS } from '@/lib/chartColors';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/shared/ErrorState';
+
+interface AttendanceStatusCounts {
+  present: number;
+  absent: number;
+  late: number;
+  leave: number;
+  half_day: number;
+}
+
+const ATTENDANCE_DONUT_CONFIG: { key: keyof AttendanceStatusCounts; name: string; color: string }[] = [
+  { key: 'present', name: 'Present', color: CHART_COLORS.good },
+  { key: 'absent', name: 'Absent', color: CHART_COLORS.critical },
+  { key: 'late', name: 'Late', color: CHART_COLORS.warning },
+  { key: 'leave', name: 'Leave', color: CHART_COLORS.series1 },
+  { key: 'half_day', name: 'Half Day', color: '#9333ea' },
+];
 
 type BadgeType = 'perfect_week' | 'top_of_class' | 'streak_7';
 
@@ -58,6 +76,7 @@ export default function StudentDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [subjects, setSubjects] = useState<SubjectCard[]>([]);
+  const [attendanceCounts, setAttendanceCounts] = useState<AttendanceStatusCounts | null>(null);
   const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
@@ -81,6 +100,13 @@ export default function StudentDashboardPage() {
       .get<{ success: boolean; data: { subjects: SubjectCard[] } }>('/api/student/subjects')
       .then((res) => {
         if (!cancelled) setSubjects(res.data.data.subjects);
+      })
+      .catch(() => {});
+
+    api
+      .get<{ success: boolean; data: { statusCounts: AttendanceStatusCounts } }>('/api/student/attendance')
+      .then((res) => {
+        if (!cancelled) setAttendanceCounts(res.data.data.statusCounts);
       })
       .catch(() => {});
 
@@ -178,6 +204,34 @@ export default function StudentDashboardPage() {
                 </Link>
               ))}
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {attendanceCounts && Object.values(attendanceCounts).some((v) => v > 0) && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Attendance This Month</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={240}>
+              <PieChart>
+                <Pie
+                  data={ATTENDANCE_DONUT_CONFIG.map((c) => ({ name: c.name, value: attendanceCounts[c.key], color: c.color }))}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius={55}
+                  outerRadius={85}
+                  paddingAngle={2}
+                >
+                  {ATTENDANCE_DONUT_CONFIG.map((c) => (
+                    <Cell key={c.key} fill={c.color} stroke="#fcfcfb" strokeWidth={2} />
+                  ))}
+                </Pie>
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
           </CardContent>
         </Card>
       )}

@@ -25,14 +25,13 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 
-interface LeaveRequestRow {
+interface TeacherLeaveRow {
   id: string;
+  fromDate: string;
+  toDate: string;
   reason: string;
-  startDate: string;
-  endDate: string;
   status: 'pending' | 'approved' | 'rejected';
   reviewNote: string | null;
-  reviewedByName: string | null;
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -46,8 +45,8 @@ function getErrorMessage(err: unknown, fallback: string): string {
   return axiosErr.response?.data?.error ?? fallback;
 }
 
-export default function StudentLeaveRequestPage() {
-  const [requests, setRequests] = useState<LeaveRequestRow[]>([]);
+export default function MyLeavePage() {
+  const [leaves, setLeaves] = useState<TeacherLeaveRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -56,36 +55,41 @@ export default function StudentLeaveRequestPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  async function loadRequests() {
+  async function load() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.get<{ success: boolean; data: { requests: LeaveRequestRow[] } }>(
-        '/api/student/leave-requests'
+      const res = await api.get<{ success: boolean; data: { leaves: TeacherLeaveRow[] } }>(
+        '/api/teacher/leave'
       );
-      setRequests(res.data.data.requests);
+      setLeaves(res.data.data.leaves);
     } catch (err) {
-      setError(getErrorMessage(err, 'Failed to load leave requests.'));
+      setError(getErrorMessage(err, 'Failed to load your leave applications.'));
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    loadRequests();
+    load();
   }, []);
+
+  function openDialog() {
+    setForm({ fromDate: '', toDate: '', reason: '' });
+    setFormError(null);
+    setDialogOpen(true);
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setFormError(null);
     setSubmitting(true);
     try {
-      await api.post('/api/student/leave-request', form);
+      await api.post('/api/teacher/leave', form);
       setDialogOpen(false);
-      setForm({ fromDate: '', toDate: '', reason: '' });
-      await loadRequests();
+      await load();
     } catch (err) {
-      setFormError(getErrorMessage(err, 'Failed to submit leave request.'));
+      setFormError(getErrorMessage(err, 'Failed to submit leave application.'));
     } finally {
       setSubmitting(false);
     }
@@ -94,26 +98,18 @@ export default function StudentLeaveRequestPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Leave Requests</h1>
-        <Button
-          onClick={() => {
-            setForm({ fromDate: '', toDate: '', reason: '' });
-            setFormError(null);
-            setDialogOpen(true);
-          }}
-        >
-          + Apply for Leave
-        </Button>
+        <h1 className="text-xl font-semibold">My Leave Applications</h1>
+        <Button onClick={openDialog}>+ Apply for Leave</Button>
       </div>
 
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading...</p>
       ) : error ? (
         <p className="text-sm text-destructive">{error}</p>
-      ) : requests.length === 0 ? (
+      ) : leaves.length === 0 ? (
         <Card>
           <CardContent className="pt-6 text-center text-sm text-muted-foreground">
-            No leave requests yet.
+            No leave applications yet.
           </CardContent>
         </Card>
       ) : (
@@ -124,24 +120,22 @@ export default function StudentLeaveRequestPage() {
                 <TableHead>Date Range</TableHead>
                 <TableHead>Reason</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Review Note</TableHead>
+                <TableHead>Coordinator Note</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {requests.map((r) => (
-                <TableRow key={r.id}>
+              {leaves.map((l) => (
+                <TableRow key={l.id}>
                   <TableCell>
-                    {new Date(r.startDate).toLocaleDateString()} – {new Date(r.endDate).toLocaleDateString()}
+                    {new Date(l.fromDate).toLocaleDateString()} – {new Date(l.toDate).toLocaleDateString()}
                   </TableCell>
-                  <TableCell className="max-w-[240px] truncate">{r.reason}</TableCell>
+                  <TableCell className="max-w-[240px] truncate">{l.reason}</TableCell>
                   <TableCell>
-                    <Badge variant="outline" className={STATUS_STYLE[r.status]}>
-                      {r.status.toUpperCase()}
+                    <Badge variant="outline" className={STATUS_STYLE[l.status]}>
+                      {l.status.toUpperCase()}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {r.reviewNote ? `${r.reviewNote}${r.reviewedByName ? ` — ${r.reviewedByName}` : ''}` : '—'}
-                  </TableCell>
+                  <TableCell className="text-muted-foreground">{l.reviewNote ?? '—'}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -157,8 +151,9 @@ export default function StudentLeaveRequestPage() {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>From Date</Label>
+                <Label htmlFor="from-date">From Date</Label>
                 <Input
+                  id="from-date"
                   type="date"
                   required
                   value={form.fromDate}
@@ -166,8 +161,9 @@ export default function StudentLeaveRequestPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>To Date</Label>
+                <Label htmlFor="to-date">To Date</Label>
                 <Input
+                  id="to-date"
                   type="date"
                   required
                   value={form.toDate}
@@ -176,8 +172,9 @@ export default function StudentLeaveRequestPage() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Reason</Label>
+              <Label htmlFor="reason">Reason</Label>
               <Textarea
+                id="reason"
                 required
                 value={form.reason}
                 onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value }))}
@@ -190,7 +187,7 @@ export default function StudentLeaveRequestPage() {
             )}
             <DialogFooter>
               <Button type="submit" disabled={submitting}>
-                {submitting ? 'Submitting...' : 'Submit Request'}
+                {submitting ? 'Submitting...' : 'Submit to Coordinator'}
               </Button>
             </DialogFooter>
           </form>

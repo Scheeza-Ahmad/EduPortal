@@ -30,6 +30,7 @@ const NAV_ITEMS: { href: string; key: TranslationKey; icon?: string; feature?: k
   { href: '/admin/calendar', key: 'calendar', feature: 'featureCalendar' },
   { href: '/admin/leave-requests', key: 'leaveRequests', feature: 'featureLeaveRequests' },
   { href: '/admin/consent-forms', key: 'consentForms', feature: 'featureConsentForms' },
+  { href: '/admin/staff-leaves', key: 'staffLeaves' },
   { href: '/admin/at-risk', key: 'atRiskStudents', icon: '⚠️', feature: 'featureAiInsights' },
   { href: '/admin/finance-officer', key: 'financeOfficer', feature: 'featureFinance' },
   { href: '/admin/school-settings', key: 'schoolSettings' },

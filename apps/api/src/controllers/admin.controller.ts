@@ -9,6 +9,8 @@ import { auditLog } from '../utils/audit';
 import { AuthRequest } from '../middleware/auth';
 import { sendWelcomeEmail } from '../jobs/welcomeEmail';
 import { buildReportCard } from '../services/reportCard';
+import { applyLeaveAttendance } from '../utils/leaveAttendance';
+import { notifyAnnouncementAudience, notifyAnnouncementRecipients } from '../utils/announcementNotify';
 
 // ---------------------------------------------------------------
 // Shared helpers
@@ -1226,6 +1228,17 @@ const createAnnouncementSchema = z.object({
   title: z.string().min(1),
   body: z.string().min(1),
   classId: z.string().optional(), // omitted / undefined = school-wide
+  audience: z
+    .enum([
+      'all_students',
+      'all_teachers',
+      'class_teachers_only',
+      'subject_teachers_only',
+      'all_staff',
+      'school_wide',
+      'specific_class',
+    ])
+    .optional(),
 });
 
 export async function createAnnouncement(req: AuthRequest, res: Response): Promise<void> {
@@ -1237,7 +1250,7 @@ export async function createAnnouncement(req: AuthRequest, res: Response): Promi
     send(res, 400, undefined, 'Invalid announcement data');
     return;
   }
-  const { title, body, classId } = parsed.data;
+  const { title, body, classId, audience } = parsed.data;
 
   if (classId) {
     const targetClass = await prisma.class.findFirst({ where: { id: classId, schoolId } });
@@ -1256,9 +1269,28 @@ export async function createAnnouncement(req: AuthRequest, res: Response): Promi
     action: 'ANNOUNCEMENT_CREATE',
     targetTable: 'Announcement',
     targetId: announcement.id,
-    meta: { title, classId },
+    meta: { title, classId, audience },
     ip: req.ip,
   });
+
+  if (audience) {
+    await notifyAnnouncementAudience({
+      schoolId,
+      authorId: req.user!.userId,
+      title,
+      body,
+      audience,
+      classId: classId ?? null,
+    });
+  } else {
+    await notifyAnnouncementRecipients({
+      schoolId,
+      authorId: req.user!.userId,
+      title,
+      body,
+      classId: classId ?? null,
+    });
+  }
 
   send(res, 201, announcement);
 }
@@ -2206,6 +2238,10 @@ export async function reviewAdminLeaveRequest(req: AuthRequest, res: Response): 
     data: { status: action, reviewNote, reviewedBy: req.user!.userId, reviewedAt: new Date() },
   });
 
+  if (action === 'approved') {
+    await applyLeaveAttendance(updated);
+  }
+
   const notifyIds = [existing.requesterId, existing.reviewedBy].filter(
     (id, i, arr): id is string => Boolean(id) && arr.indexOf(id) === i && id !== req.user!.userId
   );
@@ -2706,4 +2742,93 @@ export async function getSchoolFeaturesSelf(req: AuthRequest, res: Response): Pr
   });
 
   send(res, 200, school ?? {});
+}
+
+// ---------------------------------------------------------------
+// GET /api/admin/staff-leaves
+// PATCH /api/admin/staff-leaves/:id/review
+// All teacher/coordinator leave requests for this school — both
+// coordinator-approved teacher leaves and coordinators' own leave (which
+// skips straight to admin).
+// ---------------------------------------------------------------
+
+export async function getStaffLeaves(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const leaves = await prisma.teacherLeave.findMany({
+    where: { schoolId },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  const teacherIds = [...new Set(leaves.map((l) => l.teacherId))];
+  const teachers = await prisma.user.findMany({
+    where: { id: { in: teacherIds } },
+    select: { id: true, name: true, role: true },
+  });
+  const teacherById = new Map(teachers.map((t) => [t.id, t]));
+
+  send(res, 200, {
+    leaves: leaves.map((l) => ({
+      id: l.id,
+      staffName: teacherById.get(l.teacherId)?.name ?? 'Unknown',
+      role: teacherById.get(l.teacherId)?.role ?? 'teacher',
+      fromDate: l.fromDate,
+      toDate: l.toDate,
+      reason: l.reason,
+      status: l.status,
+      reviewNote: l.reviewNote,
+    })),
+  });
+}
+
+const adminReviewStaffLeaveSchema = z.object({
+  action: z.enum(['approved', 'rejected']),
+  reviewNote: z.string().max(1000).optional(),
+});
+
+export async function reviewStaffLeave(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = adminReviewStaffLeaveSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid review data');
+    return;
+  }
+
+  const existing = await prisma.teacherLeave.findFirst({ where: { id: req.params.id, schoolId } });
+  if (!existing) {
+    send(res, 404, undefined, 'Leave request not found');
+    return;
+  }
+
+  const { action, reviewNote } = parsed.data;
+  const updated = await prisma.teacherLeave.update({
+    where: { id: existing.id },
+    data: { status: action, reviewNote, reviewedBy: req.user!.userId, reviewedAt: new Date() },
+  });
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'STAFF_LEAVE_REVIEWED',
+    targetTable: 'TeacherLeave',
+    targetId: existing.id,
+    meta: { decision: action },
+    ip: req.ip,
+  });
+
+  try {
+    await prisma.notification.create({
+      data: {
+        userId: existing.teacherId,
+        type: 'TEACHER_LEAVE_REVIEWED',
+        message: `Your leave request (${new Date(existing.fromDate).toLocaleDateString()} – ${new Date(existing.toDate).toLocaleDateString()}) was ${action} by the school admin.`,
+      },
+    });
+  } catch (err) {
+    console.error('[reviewStaffLeave] Failed to notify teacher', { leaveId: existing.id, err });
+  }
+
+  send(res, 200, updated);
 }

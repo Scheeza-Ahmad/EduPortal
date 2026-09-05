@@ -8,6 +8,8 @@ import { checkAbsenceStreak } from '../jobs/absenceStreak';
 import { notifyParentOfAbsence } from '../jobs/absenceNotify';
 import { checkLowGrade } from '../jobs/lowGradeAlert';
 import { checkFullMarks, checkPerfectWeek, checkTopOfClass } from '../jobs/badgeAward';
+import { applyLeaveAttendance } from '../utils/leaveAttendance';
+import { notifyAnnouncementAudience, notifyAnnouncementRecipients } from '../utils/announcementNotify';
 
 // ---------------------------------------------------------------
 // Shared helpers
@@ -23,6 +25,22 @@ async function findOwnSubject(teacherId: string, subjectId: string) {
 /** Verifies an activity was created by this teacher. */
 async function findOwnActivity(teacherId: string, activityId: string) {
   return prisma.activity.findFirst({ where: { id: activityId, createdById: teacherId } });
+}
+
+/** Class-teacher-only features (attendance, class fees, leave requests, half
+ * day) are scoped to classes this teacher is the *assigned class teacher*
+ * for — a narrower set than "classes I teach a subject in". */
+async function isClassTeacherOfClass(teacherId: string, classId: string): Promise<boolean> {
+  const cls = await prisma.class.findFirst({ where: { id: classId, classTeacherId: teacherId } });
+  return Boolean(cls);
+}
+
+async function getMyClassTeacherClassIds(teacherId: string): Promise<string[]> {
+  const classes = await prisma.class.findMany({
+    where: { classTeacherId: teacherId },
+    select: { id: true },
+  });
+  return classes.map((c) => c.id);
 }
 
 // =================================================================
@@ -474,7 +492,7 @@ const markAttendanceSchema = z.object({
   records: z.array(
     z.object({
       studentId: z.string().min(1),
-      status: z.enum(['present', 'absent', 'late']),
+      status: z.enum(['present', 'absent', 'late', 'leave', 'half_day']),
     })
   ),
 });
@@ -492,6 +510,11 @@ export async function markAttendance(req: AuthRequest, res: Response): Promise<v
   const subject = await findOwnSubject(teacherId, subjectId);
   if (!subject) {
     send(res, 400, undefined, 'Subject not found or not assigned to you');
+    return;
+  }
+
+  if (!(await isClassTeacherOfClass(teacherId, subject.classId))) {
+    send(res, 403, undefined, 'Only the class teacher can mark attendance for this class.');
     return;
   }
 
@@ -700,6 +723,8 @@ const createTeacherAnnouncementSchema = z.object({
   title: z.string().min(1),
   body: z.string().min(1),
   classId: z.string().min(1),
+  audience: z.enum(['my_class', 'my_subject_students', 'wing_teachers', 'all_teachers', 'school_wide']).optional(),
+  subjectId: z.string().optional(),
 });
 
 export async function createTeacherAnnouncement(req: AuthRequest, res: Response): Promise<void> {
@@ -710,7 +735,7 @@ export async function createTeacherAnnouncement(req: AuthRequest, res: Response)
     send(res, 400, undefined, 'Invalid announcement data');
     return;
   }
-  const { title, body, classId } = parsed.data;
+  const { title, body, classId, audience, subjectId } = parsed.data;
 
   const targetClass = await prisma.class.findFirst({
     where: {
@@ -738,8 +763,38 @@ export async function createTeacherAnnouncement(req: AuthRequest, res: Response)
     action: 'ANNOUNCEMENT_CREATE',
     targetTable: 'Announcement',
     targetId: announcement.id,
-    meta: { title, classId },
+    meta: { title, classId, audience },
     ip: req.ip,
+  });
+
+  if (audience && audience !== 'my_class') {
+    const teacherProfile = await prisma.teacherProfile.findUnique({ where: { userId: teacherId } });
+    await notifyAnnouncementAudience({
+      schoolId: targetClass.schoolId,
+      authorId: teacherId,
+      title,
+      body,
+      audience,
+      classId,
+      subjectId,
+      wing: (teacherProfile?.wing as 'junior' | 'senior' | null) ?? null,
+    });
+  } else {
+    await notifyAnnouncementRecipients({
+      schoolId: targetClass.schoolId,
+      authorId: teacherId,
+      title,
+      body,
+      classId,
+    });
+  }
+
+  await notifyAnnouncementRecipients({
+    schoolId: targetClass.schoolId,
+    authorId: teacherId,
+    title,
+    body,
+    classId,
   });
 
   send(res, 201, announcement);
@@ -833,11 +888,9 @@ export async function getClassFees(req: AuthRequest, res: Response): Promise<voi
       ? req.query.monthYear
       : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
-  const myClasses = await prisma.class.findMany({
-    where: { OR: [{ subjects: { some: { teacherId } } }, { classTeacherId: teacherId }] },
-    select: { id: true },
-  });
-  const classIds = myClasses.map((c) => c.id);
+  // Class fees are class-teacher-only — a subject teacher has no reason to
+  // see the fee/challan status of students they only teach one subject to.
+  const classIds = await getMyClassTeacherClassIds(teacherId);
   if (classIds.length === 0) {
     send(res, 200, { monthYear, fees: [] });
     return;
@@ -1119,19 +1172,12 @@ export async function submitMonthlyReport(req: AuthRequest, res: Response): Prom
 // Leave Requests — reviewing requests from students in the teacher's classes
 // =================================================================
 
-/** Classes this teacher has a subject in, or is the class teacher for. */
-async function getMyClassIds(teacherId: string): Promise<string[]> {
-  const classes = await prisma.class.findMany({
-    where: { OR: [{ subjects: { some: { teacherId } } }, { classTeacherId: teacherId }] },
-    select: { id: true },
-  });
-  return classes.map((c) => c.id);
-}
-
 // GET /api/teacher/leave-requests?status=pending&class=<classId>
+// Only class teachers receive/see student leave requests — a subject
+// teacher has no reason to review a leave application.
 export async function getTeacherLeaveRequests(req: AuthRequest, res: Response): Promise<void> {
   const teacherId = req.user!.userId;
-  const classIds = await getMyClassIds(teacherId);
+  const classIds = await getMyClassTeacherClassIds(teacherId);
   if (classIds.length === 0) {
     send(res, 200, { requests: [] });
     return;
@@ -1190,7 +1236,7 @@ export async function reviewTeacherLeaveRequest(req: AuthRequest, res: Response)
     return;
   }
 
-  const classIds = await getMyClassIds(teacherId);
+  const classIds = await getMyClassTeacherClassIds(teacherId);
   const existing = await prisma.leaveRequest.findFirst({
     where: { id: req.params.id, requester: { studentProfile: { classId: { in: classIds } } } },
     include: { requester: { select: { id: true, name: true, schoolId: true } } },
@@ -1206,6 +1252,10 @@ export async function reviewTeacherLeaveRequest(req: AuthRequest, res: Response)
     where: { id: existing.id },
     data: { status: action, reviewNote, reviewedBy: teacherId, reviewedAt: new Date() },
   });
+
+  if (action === 'approved') {
+    await applyLeaveAttendance(updated);
+  }
 
   await prisma.notification.create({
     data: {
@@ -1328,4 +1378,106 @@ export async function getGradeSuggestion(req: AuthRequest, res: Response): Promi
     },
     distribution,
   });
+}
+
+// =================================================================
+// Teacher's own leave applications — separate from student LeaveRequest.
+// Teacher applies to their wing coordinator; a coordinator applying for
+// their own leave skips straight to admin instead.
+// =================================================================
+
+const teacherLeaveSchema = z.object({
+  fromDate: z.string().min(1),
+  toDate: z.string().min(1),
+  reason: z.string().min(1),
+});
+
+export async function createTeacherLeave(req: AuthRequest, res: Response): Promise<void> {
+  const teacherId = req.user!.userId;
+  const schoolId = req.user!.schoolId;
+  if (!schoolId) {
+    send(res, 403, undefined, 'No school assigned to this account');
+    return;
+  }
+
+  const parsed = teacherLeaveSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid leave application data');
+    return;
+  }
+  const { fromDate, toDate, reason } = parsed.data;
+
+  const fromD = new Date(fromDate);
+  const toD = new Date(toDate);
+  if (Number.isNaN(fromD.getTime()) || Number.isNaN(toD.getTime()) || toD < fromD) {
+    send(res, 400, undefined, 'Invalid date range');
+    return;
+  }
+
+  const leave = await prisma.teacherLeave.create({
+    data: { teacherId, schoolId, fromDate: fromD, toDate: toD, reason },
+  });
+
+  await auditLog({
+    userId: teacherId,
+    action: 'TEACHER_LEAVE_SUBMITTED',
+    targetTable: 'TeacherLeave',
+    targetId: leave.id,
+    ip: req.ip,
+  });
+
+  // Best-effort notification — the application itself already succeeded.
+  try {
+    const [requesterProfile, requesterUser] = await Promise.all([
+      prisma.teacherProfile.findUnique({ where: { userId: teacherId } }),
+      prisma.user.findUnique({ where: { id: teacherId }, select: { name: true } }),
+    ]);
+
+    if (requesterProfile?.isCoordinator) {
+      // A coordinator's own leave goes straight to admin.
+      const admins = await prisma.user.findMany({
+        where: { schoolId, role: 'school_admin', isActive: true },
+        select: { id: true },
+      });
+      await prisma.notification.createMany({
+        data: admins.map((a) => ({
+          userId: a.id,
+          type: 'TEACHER_LEAVE_SUBMITTED',
+          message: `${requesterUser?.name ?? 'A coordinator'} applied for leave from ${fromD.toLocaleDateString()} to ${toD.toLocaleDateString()}.`,
+        })),
+      });
+    } else if (requesterProfile?.wing) {
+      const coordinators = await prisma.user.findMany({
+        where: {
+          schoolId,
+          role: 'coordinator',
+          isActive: true,
+          teacherProfile: { coordinatorWing: { in: [requesterProfile.wing, 'both'] } },
+        },
+        select: { id: true },
+      });
+      await prisma.notification.createMany({
+        data: coordinators.map((c) => ({
+          userId: c.id,
+          type: 'TEACHER_LEAVE_SUBMITTED',
+          message: `${requesterUser?.name ?? 'A teacher'} applied for leave from ${fromD.toLocaleDateString()} to ${toD.toLocaleDateString()}.`,
+        })),
+      });
+    }
+  } catch (err) {
+    console.error('[createTeacherLeave] Failed to notify reviewer', { leaveId: leave.id, err });
+  }
+
+  send(res, 201, leave);
+}
+
+export async function getMyTeacherLeaves(req: AuthRequest, res: Response): Promise<void> {
+  const teacherId = req.user!.userId;
+
+  const leaves = await prisma.teacherLeave.findMany({
+    where: { teacherId },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  send(res, 200, { leaves });
 }

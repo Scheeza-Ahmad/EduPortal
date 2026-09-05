@@ -24,6 +24,7 @@ const NAV_ITEMS: { href: string; key: TranslationKey; feature?: keyof SchoolFeat
   { href: '/coordinator/students', key: 'students' },
   { href: '/coordinator/announcements', key: 'announcements', feature: 'featureAnnouncements' },
   { href: '/coordinator/wing-report', key: 'wingReport' },
+  { href: '/coordinator/teacher-leaves', key: 'teacherLeaves' },
 ];
 
 export default function CoordinatorLayout({ children }: { children: ReactNode }) {

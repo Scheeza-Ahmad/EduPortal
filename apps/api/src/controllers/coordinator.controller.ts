@@ -5,6 +5,7 @@ import { prisma } from '../utils/prisma';
 import { send } from '../utils/response';
 import { auditLog } from '../utils/audit';
 import { AuthRequest } from '../middleware/auth';
+import { notifyAnnouncementRecipients } from '../utils/announcementNotify';
 
 // ---------------------------------------------------------------
 // Shared helpers
@@ -749,6 +750,15 @@ export async function createCoordinatorAnnouncement(req: AuthRequest, res: Respo
       meta: { title, targetWing: true, count: created.length },
       ip: req.ip,
     });
+    for (const c of classes) {
+      await notifyAnnouncementRecipients({
+        schoolId: ctx.schoolId,
+        authorId: req.user!.userId,
+        title,
+        body,
+        classId: c.id,
+      });
+    }
     send(res, 201, { announcements: created });
     return;
   }
@@ -764,6 +774,14 @@ export async function createCoordinatorAnnouncement(req: AuthRequest, res: Respo
     targetId: announcement.id,
     meta: { title, targetWing: false },
     ip: req.ip,
+  });
+
+  await notifyAnnouncementRecipients({
+    schoolId: ctx.schoolId,
+    authorId: req.user!.userId,
+    title,
+    body,
+    classId: null,
   });
 
   send(res, 201, announcement);
@@ -925,4 +943,110 @@ export async function submitWingReport(req: AuthRequest, res: Response): Promise
   });
 
   send(res, 201, report);
+}
+
+// =================================================================
+// Teacher leave requests — pending leave from this coordinator's own wing.
+// =================================================================
+
+export async function getTeacherLeaves(req: AuthRequest, res: Response): Promise<void> {
+  const ctx = await requireWingContext(req, res);
+  if (!ctx) return;
+
+  const wingTeachers = await getWingTeachers(ctx.schoolId, ctx.wing);
+  const teacherIds = wingTeachers.map((t) => t.id);
+  if (teacherIds.length === 0) {
+    send(res, 200, { leaves: [] });
+    return;
+  }
+
+  const leaves = await prisma.teacherLeave.findMany({
+    where: { teacherId: { in: teacherIds } },
+    orderBy: { createdAt: 'desc' },
+  });
+  const teacherById = new Map(wingTeachers.map((t) => [t.id, t.name]));
+
+  send(res, 200, {
+    leaves: leaves.map((l) => ({
+      id: l.id,
+      teacherName: teacherById.get(l.teacherId) ?? 'Unknown',
+      fromDate: l.fromDate,
+      toDate: l.toDate,
+      reason: l.reason,
+      status: l.status,
+      reviewNote: l.reviewNote,
+    })),
+  });
+}
+
+const reviewTeacherLeaveSchema = z.object({
+  action: z.enum(['approved', 'rejected']),
+  reviewNote: z.string().max(1000).optional(),
+});
+
+export async function reviewTeacherLeave(req: AuthRequest, res: Response): Promise<void> {
+  const ctx = await requireWingContext(req, res);
+  if (!ctx) return;
+
+  const parsed = reviewTeacherLeaveSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid review data');
+    return;
+  }
+
+  const wingTeachers = await getWingTeachers(ctx.schoolId, ctx.wing);
+  const teacherIds = wingTeachers.map((t) => t.id);
+
+  const existing = await prisma.teacherLeave.findFirst({
+    where: { id: req.params.id, teacherId: { in: teacherIds } },
+  });
+  if (!existing) {
+    send(res, 404, undefined, 'Leave request not found');
+    return;
+  }
+
+  const { action, reviewNote } = parsed.data;
+  const updated = await prisma.teacherLeave.update({
+    where: { id: existing.id },
+    data: { status: action, reviewNote, reviewedBy: req.user!.userId, reviewedAt: new Date() },
+  });
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'TEACHER_LEAVE_REVIEWED',
+    targetTable: 'TeacherLeave',
+    targetId: existing.id,
+    meta: { decision: action },
+    ip: req.ip,
+  });
+
+  // Notify the teacher either way; if approved, admin should also see it
+  // reflected on the Staff Leaves page (no extra notification needed there
+  // — admin's list already reads TeacherLeave directly).
+  try {
+    await prisma.notification.create({
+      data: {
+        userId: existing.teacherId,
+        type: 'TEACHER_LEAVE_REVIEWED',
+        message: `Your leave request (${new Date(existing.fromDate).toLocaleDateString()} – ${new Date(existing.toDate).toLocaleDateString()}) was ${action} by your coordinator.`,
+      },
+    });
+    if (action === 'approved') {
+      const admins = await prisma.user.findMany({
+        where: { schoolId: ctx.schoolId, role: 'school_admin', isActive: true },
+        select: { id: true },
+      });
+      await prisma.notification.createMany({
+        data: admins.map((a) => ({
+          userId: a.id,
+          type: 'TEACHER_LEAVE_APPROVED',
+          message: `A teacher leave request in ${ctx.wingLabel} was approved by the wing coordinator.`,
+        })),
+      });
+    }
+  } catch (err) {
+    console.error('[reviewTeacherLeave] Failed to notify', { leaveId: existing.id, err });
+  }
+
+  send(res, 200, updated);
 }

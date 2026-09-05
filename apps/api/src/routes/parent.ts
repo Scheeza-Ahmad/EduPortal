@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { verifyToken } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import {
+  createLeaveApplication,
   downloadChildReportCard,
   getChildAnnouncements,
   getChildAttendance,
@@ -31,6 +32,8 @@ router.get('/child/:studentId/attendance', getChildAttendance);
 router.get('/child/:studentId/timetable', getChildTimetable);
 router.get('/child/:studentId/announcements', getChildAnnouncements);
 router.get('/child/:studentId/fees', getChildFees);
+
+router.post('/leave-application', createLeaveApplication);
 
 router.get('/notifications', getParentNotifications);
 router.patch('/notifications/:id/read', markParentNotificationRead);

@@ -10,10 +10,12 @@ import {
   getMonthlyReports,
   getStudentsOverview,
   getTeacherDetail,
+  getTeacherLeaves,
   getTeachers,
   getWingReport,
   remindTeacher,
   reviewReport,
+  reviewTeacherLeave,
   submitWingReport,
 } from '../controllers/coordinator.controller';
 
@@ -43,5 +45,9 @@ router.delete('/announcements/:id', deleteCoordinatorAnnouncement);
 // Wing report (submitted to admin)
 router.get('/wing-report/:monthYear', getWingReport);
 router.post('/wing-report', submitWingReport);
+
+// Teacher leave requests — pending leave from teachers in this coordinator's wing
+router.get('/teacher-leaves', getTeacherLeaves);
+router.patch('/teacher-leaves/:id/review', reviewTeacherLeave);
 
 export default router;

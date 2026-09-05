@@ -28,6 +28,7 @@ const NAV_ITEMS: { href: string; key: TranslationKey; feature?: keyof SchoolFeat
   { href: '/parent', key: 'dashboard' },
   { href: '/parent/grades', key: 'grades' },
   { href: '/parent/attendance', key: 'attendance', feature: 'featureAttendance' },
+  { href: '/parent/leave-application', key: 'leave', feature: 'featureLeaveRequests' },
   { href: '/parent/fees', key: 'fees', feature: 'featureFinance' },
   { href: '/parent/messages', key: 'messages' },
   { href: '/parent/consent-forms', key: 'consentForms', feature: 'featureConsentForms' },

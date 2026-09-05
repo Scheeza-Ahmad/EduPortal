@@ -35,6 +35,8 @@ enum AttendanceStatus {
   present
   absent
   late
+  leave
+  half_day
 }
 
 enum BadgeType {
@@ -100,6 +102,7 @@ model User {
   attendanceMarks  Attendance[]   @relation("AttendanceStudent")
   announcements    Announcement[] @relation("AnnouncementAuthor")
   leaveRequests    LeaveRequest[] @relation("LeaveRequester")
+  teacherLeaves    TeacherLeave[] @relation("TeacherLeaveRequester")
 
   studentFees  StudentFee[] @relation("StudentFees")
   recordedFees FeePayment[] @relation("FeePayments")
@@ -442,6 +445,7 @@ model LeaveRequest {
   startDate   DateTime
   endDate     DateTime
   status      LeaveStatus @default(pending)
+  type        String      @default("leave") // "leave" | "half_day" — only meaningful for student requests
   reviewedBy  String?
   reviewedAt  DateTime?
   reviewNote  String?
@@ -452,6 +456,30 @@ model LeaveRequest {
 
   @@index([requesterId])
   @@index([status])
+}
+
+// Teacher/coordinator leave — separate from LeaveRequest (student/teacher
+// generic leave), because the review chain here is hierarchical:
+// teacher -> coordinator -> (approved) -> admin sees it; coordinator's own
+// leave skips straight to admin.
+model TeacherLeave {
+  id         String    @id @default(cuid())
+  teacherId  String
+  schoolId   String
+  fromDate   DateTime  @db.Date
+  toDate     DateTime  @db.Date
+  reason     String
+  status     String    @default("pending") // pending | approved | rejected
+  reviewedBy String?
+  reviewNote String?
+  reviewedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  teacher User @relation("TeacherLeaveRequester", fields: [teacherId], references: [id])
+
+  @@index([teacherId])
+  @@index([schoolId])
 }
 
 model Notification {
@@ -511,6 +539,14 @@ model SchoolSettings {
   phone             String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
+
+  // Timetable settings
+  schoolStartTime String   @default("08:00")
+  schoolEndTime   String   @default("14:00")
+  periodDuration  Int      @default(45)
+  breakStartTime  String   @default("10:30")
+  breakDuration   Int      @default(20)
+  workingDays     String[] @default(["monday", "tuesday", "wednesday", "thursday", "friday"])
 
   // White-labeling / branding
   portalName   String?

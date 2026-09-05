@@ -3,7 +3,7 @@
 import { FormEvent, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AxiosError } from 'axios';
-import { ArrowLeft, Lock } from 'lucide-react';
+import { ArrowLeft, Eye, EyeOff, Lock } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/store';
 import { Button } from '@/components/ui/button';
@@ -139,6 +139,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
   const [loginLoading, setLoginLoading] = useState(false);
   const [roleMismatchNotice, setRoleMismatchNotice] = useState<string | null>(null);
 
@@ -219,7 +220,8 @@ export default function LoginPage() {
 
       router.push(destination);
     } catch (err) {
-      setLoginError(getErrorMessage(err, 'Something went wrong. Please try again.'));
+      setLoginError(getErrorMessage(err, 'Incorrect email or password. Please try again.'));
+      setPassword(''); // clear only the password — email stays so the user isn't retyping it
       setLoginLoading(false);
     }
   }
@@ -387,21 +389,31 @@ export default function LoginPage() {
                     Forgot password?
                   </button>
                 </div>
-                <Input
-                  id="password"
-                  type="password"
-                  autoComplete="current-password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className={colors.ring}
-                />
+                <div className="relative">
+                  <Input
+                    id="password"
+                    type={showPassword ? 'text' : 'password'}
+                    autoComplete="current-password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className={cn('pr-9', colors.ring)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
               </div>
 
               {loginError && (
-                <p className="text-sm text-destructive" role="alert">
-                  {loginError}
-                </p>
+                <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-400" role="alert">
+                  ⚠️ {loginError}
+                </div>
               )}
 
               <Button type="submit" className={cn('w-full text-white', colors.button)} disabled={loginLoading}>

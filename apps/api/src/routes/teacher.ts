@@ -5,6 +5,7 @@ import { requireFeature } from '../middleware/featureCheck';
 import {
   createActivity,
   createTeacherAnnouncement,
+  createTeacherLeave,
   deleteActivity,
   deleteTeacherAnnouncement,
   getActivities,
@@ -19,6 +20,7 @@ import {
   getMonthlyReport,
   getMyClassAnnouncements,
   getMyClasses,
+  getMyTeacherLeaves,
   getMySubjects,
   getReusableActivities,
   getSubmissions,
@@ -84,5 +86,9 @@ router.delete('/announcements/:id', requireFeature('featureAnnouncements'), dele
 // Leave Requests
 router.get('/leave-requests', requireFeature('featureLeaveRequests'), getTeacherLeaveRequests);
 router.patch('/leave-requests/:id/review', requireFeature('featureLeaveRequests'), reviewTeacherLeaveRequest);
+
+// Teacher's own leave — to coordinator (or admin, if the teacher is itself a coordinator)
+router.post('/leave', createTeacherLeave);
+router.get('/leave', getMyTeacherLeaves);
 
 export default router;

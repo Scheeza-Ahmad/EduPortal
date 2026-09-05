@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { AxiosError } from 'axios';
 import { api } from '@/lib/api';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -22,7 +23,37 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 
-type Status = 'present' | 'absent' | 'late';
+type Status = 'present' | 'absent' | 'late' | 'leave' | 'half_day';
+
+const STATUS_ORDER: Status[] = ['present', 'absent', 'late', 'leave', 'half_day'];
+
+const STATUS_STYLE: Record<Status, { label: string; solid: string; outline: string }> = {
+  present: {
+    label: 'Present',
+    solid: 'bg-green-600 hover:bg-green-700 text-white border-green-600',
+    outline: 'border-green-600 text-green-700 hover:bg-green-50 dark:text-green-400',
+  },
+  absent: {
+    label: 'Absent',
+    solid: 'bg-red-600 hover:bg-red-700 text-white border-red-600',
+    outline: 'border-red-600 text-red-700 hover:bg-red-50 dark:text-red-400',
+  },
+  late: {
+    label: 'Late',
+    solid: 'bg-orange-600 hover:bg-orange-700 text-white border-orange-600',
+    outline: 'border-orange-600 text-orange-700 hover:bg-orange-50 dark:text-orange-400',
+  },
+  leave: {
+    label: 'Leave',
+    solid: 'bg-blue-600 hover:bg-blue-700 text-white border-blue-600',
+    outline: 'border-blue-600 text-blue-700 hover:bg-blue-50 dark:text-blue-400',
+  },
+  half_day: {
+    label: 'Half Day',
+    solid: 'bg-purple-600 hover:bg-purple-700 text-white border-purple-600',
+    outline: 'border-purple-600 text-purple-700 hover:bg-purple-50 dark:text-purple-400',
+  },
+};
 
 interface SubjectOption {
   id: string;
@@ -205,19 +236,23 @@ export default function AttendancePage() {
                     <TableCell>{entry.rollNo}</TableCell>
                     <TableCell className="font-medium">{entry.name}</TableCell>
                     <TableCell>
-                      <div className="flex gap-1">
-                        {(['present', 'absent', 'late'] as Status[]).map((status) => (
-                          <Button
-                            key={status}
-                            type="button"
-                            size="sm"
-                            variant={entry.status === status ? 'default' : 'outline'}
-                            onClick={() => setStatus(entry.studentId, status)}
-                            className="capitalize"
-                          >
-                            {status}
-                          </Button>
-                        ))}
+                      <div className="flex flex-wrap gap-1">
+                        {STATUS_ORDER.map((status) => {
+                          const isSelected = entry.status === status;
+                          const style = STATUS_STYLE[status];
+                          return (
+                            <Button
+                              key={status}
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setStatus(entry.studentId, status)}
+                              className={cn(isSelected ? style.solid : style.outline)}
+                            >
+                              {style.label}
+                            </Button>
+                          );
+                        })}
                       </div>
                     </TableCell>
                   </TableRow>

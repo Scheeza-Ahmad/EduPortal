@@ -16,16 +16,22 @@ import { useFeatures } from '@/lib/FeaturesContext';
 import type { SchoolFeatures } from '@/lib/FeaturesContext';
 import { PortalToggles } from '@/components/portal-toggles';
 
-const NAV_ITEMS: { href: string; key: TranslationKey; feature?: keyof SchoolFeatures }[] = [
+const NAV_ITEMS: {
+  href: string;
+  key: TranslationKey;
+  feature?: keyof SchoolFeatures;
+  classTeacherOnly?: boolean;
+}[] = [
   { href: '/teacher', key: 'dashboard' },
   { href: '/teacher/activities', key: 'activities' },
-  { href: '/teacher/attendance', key: 'attendance', feature: 'featureAttendance' },
+  { href: '/teacher/attendance', key: 'attendance', feature: 'featureAttendance', classTeacherOnly: true },
   { href: '/teacher/classes', key: 'myClasses' },
   { href: '/teacher/timetable', key: 'timetable', feature: 'featureTimetable' },
   { href: '/teacher/announcements', key: 'announcements', feature: 'featureAnnouncements' },
   { href: '/teacher/monthly-report', key: 'monthlyReport', feature: 'featureMonthlyReports' },
-  { href: '/teacher/class-fees', key: 'classFees', feature: 'featureFinance' },
-  { href: '/teacher/leave-requests', key: 'leaveRequests', feature: 'featureLeaveRequests' },
+  { href: '/teacher/class-fees', key: 'classFees', feature: 'featureFinance', classTeacherOnly: true },
+  { href: '/teacher/leave-requests', key: 'leaveRequests', feature: 'featureLeaveRequests', classTeacherOnly: true },
+  { href: '/teacher/my-leave', key: 'myLeave' },
 ];
 
 export default function TeacherLayout({ children }: { children: ReactNode }) {
@@ -39,8 +45,27 @@ export default function TeacherLayout({ children }: { children: ReactNode }) {
   const [checkingSession, setCheckingSession] = useState(true);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [isClassTeacher, setIsClassTeacher] = useState(false);
 
-  const visibleNavItems = NAV_ITEMS.filter((item) => !item.feature || hasFeature(item.feature));
+  // Attendance/Class Fees/Leave Requests are class-teacher-only — check once
+  // per session by seeing if any of "my classes" has this teacher as its
+  // assigned class teacher.
+  useEffect(() => {
+    if (!accessToken || !user) return;
+    api
+      .get<{ success: boolean; data: { classes: { classTeacherId: string | null }[] } }>(
+        '/api/teacher/classes'
+      )
+      .then((res) => {
+        setIsClassTeacher(res.data.data.classes.some((c) => c.classTeacherId === user.id));
+      })
+      .catch(() => {});
+  }, [accessToken, user]);
+
+  const visibleNavItems = NAV_ITEMS.filter(
+    (item) =>
+      (!item.feature || hasFeature(item.feature)) && (!item.classTeacherOnly || isClassTeacher)
+  );
 
   // Clear the pending indicator once the route has actually changed.
   useEffect(() => {

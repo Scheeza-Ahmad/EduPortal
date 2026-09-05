@@ -379,6 +379,81 @@ export async function getChildFees(req: AuthRequest, res: Response): Promise<voi
 }
 
 // =================================================================
+// POST /api/parent/leave-application — parent applies for full-day leave or
+// half-day on behalf of a child. Goes through the same LeaveRequest review
+// flow the student's own leave-request submission does (class teacher /
+// admin approves), just submitted by the parent instead.
+// =================================================================
+
+const leaveApplicationSchema = z
+  .object({
+    studentId: z.string().min(1), // StudentProfile.id
+    type: z.enum(['leave', 'half_day']),
+    fromDate: z.string().min(1),
+    toDate: z.string().min(1).optional(),
+    reason: z.string().min(1),
+  })
+  .refine((data) => data.type === 'half_day' || Boolean(data.toDate), {
+    message: 'toDate is required for a full-day leave range',
+  });
+
+export async function createLeaveApplication(req: AuthRequest, res: Response): Promise<void> {
+  const profile = await requireParentProfile(req, res);
+  if (!profile) return;
+
+  const parsed = leaveApplicationSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid leave application data');
+    return;
+  }
+  const { studentId, type, fromDate, reason } = parsed.data;
+  const toDate = type === 'half_day' ? fromDate : parsed.data.toDate!;
+
+  const child = findChild(profile, studentId);
+  if (!child) {
+    send(res, 403, undefined, 'That student is not one of your children');
+    return;
+  }
+
+  const startDate = new Date(fromDate);
+  const endDate = new Date(toDate);
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || endDate < startDate) {
+    send(res, 400, undefined, 'Invalid date range');
+    return;
+  }
+
+  const leaveRequest = await prisma.leaveRequest.create({
+    data: { requesterId: child.user.id, reason, startDate, endDate, type, status: 'pending' },
+  });
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'LEAVE_APPLICATION_SUBMITTED',
+    targetTable: 'LeaveRequest',
+    targetId: leaveRequest.id,
+    meta: { studentId, type, fromDate, toDate },
+    ip: req.ip,
+  });
+
+  // Best-effort — the request itself already succeeded above.
+  try {
+    if (child.class.classTeacherId) {
+      await prisma.notification.create({
+        data: {
+          userId: child.class.classTeacherId,
+          type: 'LEAVE_REQUEST_SUBMITTED',
+          message: `${child.user.name}'s parent applied for ${type === 'half_day' ? 'half-day leave' : 'leave'} from ${startDate.toLocaleDateString()} to ${endDate.toLocaleDateString()}.`,
+        },
+      });
+    }
+  } catch (err) {
+    console.error('[createLeaveApplication] Failed to notify class teacher', { leaveRequestId: leaveRequest.id, err });
+  }
+
+  send(res, 201, leaveRequest);
+}
+
+// =================================================================
 // Notifications — includes direct messages from a child's teacher
 // (Notification.type === 'TEACHER_MESSAGE')
 // =================================================================

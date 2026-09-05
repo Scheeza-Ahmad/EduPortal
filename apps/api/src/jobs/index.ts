@@ -15,6 +15,7 @@ import { startInactiveSchoolAlert } from './inactiveSchoolAlert';
 import { startReportSubmissionReminder } from './reportSubmissionReminder';
 import { startCoordinatorWeeklyAlert } from './coordinatorWeeklyAlert';
 import { startWingPerformanceEmail } from './wingPerformanceEmail';
+import { startAutoAttendance } from './autoAttendance';
 import { registerJob } from './registry';
 
 // suspiciousLogin and welcomeEmail are NOT cron jobs — they're called
@@ -40,6 +41,7 @@ export function startJobs(): void {
     ['reportSubmissionReminder', startReportSubmissionReminder],
     ['coordinatorWeeklyAlert', startCoordinatorWeeklyAlert],
     ['wingPerformanceEmail', startWingPerformanceEmail],
+    ['autoAttendance', startAutoAttendance],
   ];
 
   for (const [name, start] of jobs) {
