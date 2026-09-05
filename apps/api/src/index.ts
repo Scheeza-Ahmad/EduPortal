@@ -36,11 +36,18 @@ app.use(
 app.use(cookieParser());
 app.use(express.json());
 
+// This gates every request (dashboards poll several endpoints per page,
+// portals refresh on tab focus, etc.) — 100/15min was tight enough that an
+// ordinary admin session could exhaust it and then get a 429 on something as
+// harmless as clicking Logout. The real per-account brute-force protection
+// lives on /api/auth/login specifically (see routes/auth.ts's loginLimiter,
+// 5 attempts/15min — unchanged, and not something this limit should affect).
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // 100 requests per IP per window
+  max: 500, // 500 requests per IP per window
   standardHeaders: true,
   legacyHeaders: false,
+  message: { success: false, error: 'Too many requests. Please wait a moment.' },
 });
 app.use(globalLimiter);
 

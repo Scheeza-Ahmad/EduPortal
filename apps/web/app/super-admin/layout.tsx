@@ -14,6 +14,10 @@ import { useBranding } from '@/lib/BrandingContext';
 import { WrongPortalAccess } from '@/components/wrong-portal';
 import { PortalToggles } from '@/components/portal-toggles';
 
+// Super Admin is the platform operator, not any one school — this portal
+// never shows a school's branding, regardless of what's saved in
+// localStorage from a previous login on this browser.
+
 const NAV_ITEMS = [
   { href: '/super-admin', key: 'dashboard' as const },
   { href: '/super-admin/schools', key: 'schools' as const },
@@ -26,10 +30,19 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
   const router = useRouter();
   const { accessToken, user, setAuth, clearAuth } = useAuthStore();
   const { language } = useLanguage();
-  const { branding } = useBranding();
+  const { resetToDefaultBranding } = useBranding();
   const [checkingSession, setCheckingSession] = useState(true);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  // Belt-and-suspenders: BrandingProvider already resets to default on the
+  // login page, but if a school's branding was ever saved while this same
+  // browser tab stayed on /super-admin (e.g. via "View Portal" from the
+  // schools list), clear it immediately so it never leaks in here.
+  useEffect(() => {
+    resetToDefaultBranding();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Clear the pending indicator once the route has actually changed.
   useEffect(() => {
@@ -102,11 +115,9 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
 
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 w-64 shrink-0 -translate-x-full border-r border-gray-200 p-4 dark:border-gray-700 transition-transform duration-200 lg:static lg:w-56 lg:translate-x-0',
-          !branding.sidebarColor && 'bg-white dark:bg-gray-900',
+          'fixed inset-y-0 left-0 z-50 w-64 shrink-0 -translate-x-full border-r border-gray-200 bg-white p-4 text-gray-900 transition-transform duration-200 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 lg:static lg:w-56 lg:translate-x-0',
           mobileNavOpen && 'translate-x-0'
         )}
-        style={branding.sidebarColor ? { backgroundColor: branding.sidebarColor } : undefined}
       >
         <div className="mb-6 flex items-center justify-between px-2">
           <span className="text-lg font-semibold">EduPortal</span>
@@ -136,10 +147,9 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
                 className={cn(
                   'flex items-center justify-between rounded-md px-3 py-2 text-sm font-medium transition-colors',
                   isActive
-                    ? 'text-white'
+                    ? 'bg-gray-100 dark:bg-gray-800'
                     : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 )}
-                style={isActive ? { backgroundColor: branding.primaryColor } : undefined}
               >
                 <span>{t(item.key, language)}</span>
                 {isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}

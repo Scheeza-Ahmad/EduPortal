@@ -47,6 +47,20 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const originalRequest = error.config as RetriableConfig | undefined;
 
+    // Rate-limited (429) — retrying immediately just spends the same limit
+    // faster, so this deliberately skips the retry paths below. The backend
+    // already sends a friendly `{ error: '...' }` message for this status;
+    // normalize it here too in case a response ever slips through without
+    // one, so no caller ever shows the raw "Request failed with status code
+    // 429" AxiosError text.
+    if (error.response?.status === 429) {
+      const data = error.response.data as { error?: string } | undefined;
+      if (!data?.error) {
+        error.response.data = { success: false, error: 'Too many requests. Please wait a moment.' };
+      }
+      return Promise.reject(error);
+    }
+
     // Transient failures (cold-start timeouts, connection resets, 5xx) — retry
     // once after a short delay before giving up, so a slow Supabase/Railway
     // wake-up doesn't surface as a hard error on the first request.

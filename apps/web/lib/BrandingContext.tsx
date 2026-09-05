@@ -14,33 +14,45 @@ export interface Branding {
   loginMessage: string | null;
 }
 
+// Matches shadcn/ui's own zinc-based default theme exactly (see globals.css)
+// — a school with no branding set should look pixel-identical to the
+// original, unbranded EduPortal, not some other "default" color.
 export const defaultBranding: Branding = {
   portalName: 'EduPortal',
   logoUrl: null,
-  primaryColor: '#1a56db',
-  sidebarColor: null,
-  accentColor: '#f97316',
+  primaryColor: '#18181b', // zinc-900
+  sidebarColor: '#09090b', // zinc-950
+  accentColor: '#18181b',
   fontFamily: 'Inter',
   loginBgColor: '#ffffff',
   loginMessage: null,
 };
+
+function isDefaultBranding(b: Branding): boolean {
+  return b.primaryColor === defaultBranding.primaryColor;
+}
 
 const STORAGE_KEY = 'school_branding';
 
 interface BrandingContextValue {
   branding: Branding;
   setBranding: (b: Branding) => void;
+  /** Clears any saved school branding and repaints the DOM back to the
+   * shadcn defaults — used by the Super Admin portal, which never shows a
+   * school's look regardless of what's saved from a previous login. */
+  resetToDefaultBranding: () => void;
 }
 
 export const BrandingContext = createContext<BrandingContextValue>({
   branding: defaultBranding,
   setBranding: () => {},
+  resetToDefaultBranding: () => {},
 });
 
 /** Darkens a hex color by a fixed amount — used as the sidebar fallback when
  * no explicit sidebar color is set. */
 export function darkenColor(hex: string, amount = 40): string {
-  const clean = /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : '#1a56db';
+  const clean = /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : defaultBranding.primaryColor;
   const r = Math.max(0, parseInt(clean.slice(1, 3), 16) - amount);
   const g = Math.max(0, parseInt(clean.slice(3, 5), 16) - amount);
   const b = Math.max(0, parseInt(clean.slice(5, 7), 16) - amount);
@@ -54,11 +66,28 @@ export function darkenColor(hex: string, amount = 40): string {
  * `primary: { DEFAULT: 'var(--primary)' }`) holds a complete, ready-to-use
  * CSS color value (an `oklch(...)` by default) — nothing wraps it in
  * `hsl()`/`oklch()` at the point of use. A plain hex string is just as valid
- * a CSS color there, so it's set directly with no color-space conversion. */
+ * a CSS color there, so it's set directly with no color-space conversion.
+ *
+ * For the *default* (unbranded) look, this deliberately does nothing to
+ * `--primary` and friends — it removes any previous override instead, so
+ * globals.css's own zinc theme is what actually renders, pixel-for-pixel,
+ * rather than a JS-applied approximation of it. Only a school with real
+ * custom branding gets its colors written as CSS variables here. */
 export function applyBrandingToDOM(branding: Branding): void {
   if (typeof document === 'undefined') return;
 
   const root = document.documentElement;
+
+  if (isDefaultBranding(branding)) {
+    root.style.removeProperty('--primary');
+    root.style.removeProperty('--brand-primary');
+    root.style.removeProperty('--brand-sidebar');
+    root.style.removeProperty('--brand-accent');
+    root.style.removeProperty('--brand-font');
+    document.body.style.fontFamily = ''; // back to the next/font Inter class default
+    return;
+  }
+
   const sidebarColor = branding.sidebarColor || darkenColor(branding.primaryColor);
 
   root.style.setProperty('--primary', branding.primaryColor);
@@ -115,8 +144,20 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
     if (!isLoginPage) applyBrandingToDOM(b);
   }
 
+  function resetToDefaultBranding() {
+    setBrandingState(defaultBranding);
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+    applyBrandingToDOM(defaultBranding);
+  }
+
   return (
-    <BrandingContext.Provider value={{ branding, setBranding }}>{children}</BrandingContext.Provider>
+    <BrandingContext.Provider value={{ branding, setBranding, resetToDefaultBranding }}>
+      {children}
+    </BrandingContext.Provider>
   );
 }
 

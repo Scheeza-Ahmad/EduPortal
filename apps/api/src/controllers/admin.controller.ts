@@ -1057,11 +1057,18 @@ export async function getTimetableForClass(req: AuthRequest, res: Response): Pro
     return;
   }
 
-  const slots = await prisma.timetableSlot.findMany({
-    where: { classId },
-    include: { subject: { include: { teacher: { select: { id: true, name: true } } } } },
-    orderBy: [{ dayOfWeek: 'asc' }, { startTime: 'asc' }],
-  });
+  let slots;
+  try {
+    slots = await prisma.timetableSlot.findMany({
+      where: { classId },
+      include: { subject: { include: { teacher: { select: { id: true, name: true } } } } },
+      orderBy: [{ dayOfWeek: 'asc' }, { startTime: 'asc' }],
+    });
+  } catch (err) {
+    console.error('[getTimetableForClass] Query failed', { schoolId, classId, err });
+    send(res, 500, undefined, 'Failed to load timetable. Please try again.');
+    return;
+  }
 
   send(res, 200, { slots });
 }
