@@ -45,7 +45,10 @@ interface TeacherOption {
   id: string;
   name: string;
   email: string;
+  teachingSubjects: { id: string }[];
 }
+
+const MAX_SUBJECTS_PER_TEACHER = 3;
 
 interface Subject {
   id: string;
@@ -123,6 +126,15 @@ export default function SubjectsPage() {
     loadSubjects();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [classFilter]);
+
+  /** A teacher's current subject count, excluding the subject being edited
+   * (if any) — re-saving a subject to the same teacher shouldn't count
+   * against its own limit. */
+  function subjectCountFor(teacherId: string): number {
+    const teacher = teachers.find((t) => t.id === teacherId);
+    if (!teacher) return 0;
+    return teacher.teachingSubjects.filter((s) => s.id !== editingSubject?.id).length;
+  }
 
   function openAddDialog() {
     setEditingSubject(null);
@@ -321,13 +333,22 @@ export default function SubjectsPage() {
                     <SelectValue placeholder="Select a teacher" />
                   </SelectTrigger>
                   <SelectContent>
-                    {teachers.map((t) => (
-                      <SelectItem key={t.id} value={t.id}>
-                        {t.name}
-                      </SelectItem>
-                    ))}
+                    {teachers.map((t) => {
+                      const count = subjectCountFor(t.id);
+                      return (
+                        <SelectItem key={t.id} value={t.id} disabled={count >= MAX_SUBJECTS_PER_TEACHER}>
+                          {t.name} ({count}/{MAX_SUBJECTS_PER_TEACHER} subjects)
+                        </SelectItem>
+                      );
+                    })}
                   </SelectContent>
                 </Select>
+                {form.teacherId && subjectCountFor(form.teacherId) >= MAX_SUBJECTS_PER_TEACHER && (
+                  <p className="text-xs text-destructive">
+                    ⚠️ {teachers.find((t) => t.id === form.teacherId)?.name} already has{' '}
+                    {MAX_SUBJECTS_PER_TEACHER} subjects assigned.
+                  </p>
+                )}
               </div>
             </div>
 

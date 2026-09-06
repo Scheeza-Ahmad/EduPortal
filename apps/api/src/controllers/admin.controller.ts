@@ -36,6 +36,28 @@ function isUniqueConstraintError(err: unknown): boolean {
   return err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
 }
 
+// A teacher may carry 1-3 subjects at once — enforced wherever a subject is
+// created or reassigned to a teacher.
+const MAX_SUBJECTS_PER_TEACHER = 3;
+
+/** Active subject count for a teacher within this school, optionally
+ * excluding one subject (used when re-saving a subject that already belongs
+ * to that same teacher — it shouldn't count against its own limit). */
+async function countTeacherSubjects(
+  schoolId: string,
+  teacherId: string,
+  excludeSubjectId?: string
+): Promise<number> {
+  return prisma.subject.count({
+    where: {
+      teacherId,
+      isActive: true,
+      class: { schoolId },
+      ...(excludeSubjectId ? { id: { not: excludeSubjectId } } : {}),
+    },
+  });
+}
+
 /** Strips the password hash before a user object is ever sent in a response. */
 function stripPassword<T extends { password: string }>(user: T): Omit<T, 'password'> {
   const { password: _password, ...rest } = user;
@@ -551,7 +573,9 @@ export async function getTeachers(req: AuthRequest, res: Response): Promise<void
     // here too, so admin can still manage/demote them.
     where: { schoolId, role: { in: ['teacher', 'coordinator'] } },
     include: {
-      teachingSubjects: { select: { id: true, name: true, classId: true } },
+      // isActive:true only — a soft-deleted subject shouldn't still count
+      // toward "how many subjects does this teacher currently have".
+      teachingSubjects: { where: { isActive: true }, select: { id: true, name: true, classId: true } },
       teacherProfile: true,
     },
     orderBy: { createdAt: 'desc' },
@@ -818,11 +842,28 @@ export async function createClassWithSubjects(req: AuthRequest, res: Response): 
     const teacherIds = [...new Set(subjects.map((s) => s.teacherId))];
     const validTeachers = await prisma.user.findMany({
       where: { id: { in: teacherIds }, schoolId, role: { in: ['teacher', 'coordinator'] } },
-      select: { id: true },
+      select: { id: true, name: true },
     });
     if (validTeachers.length !== teacherIds.length) {
       send(res, 400, undefined, 'One or more subject teachers were not found in this school');
       return;
+    }
+
+    // Each teacher's new load (subjects already assigned + how many times
+    // they appear in this same batch) must not exceed the per-teacher cap.
+    const teacherById = new Map(validTeachers.map((t) => [t.id, t.name]));
+    for (const teacherId of teacherIds) {
+      const countInThisBatch = subjects.filter((s) => s.teacherId === teacherId).length;
+      const existingCount = await countTeacherSubjects(schoolId, teacherId);
+      if (existingCount + countInThisBatch > MAX_SUBJECTS_PER_TEACHER) {
+        send(
+          res,
+          400,
+          undefined,
+          `${teacherById.get(teacherId) ?? 'This teacher'} cannot be assigned more than ${MAX_SUBJECTS_PER_TEACHER} subjects (currently has ${existingCount}).`
+        );
+        return;
+      }
     }
   }
 
@@ -1014,6 +1055,12 @@ export async function createSubject(req: AuthRequest, res: Response): Promise<vo
     return;
   }
 
+  const existingSubjects = await countTeacherSubjects(schoolId, teacherId);
+  if (existingSubjects >= MAX_SUBJECTS_PER_TEACHER) {
+    send(res, 400, undefined, `Teacher cannot be assigned more than ${MAX_SUBJECTS_PER_TEACHER} subjects.`);
+    return;
+  }
+
   const subject = await prisma.subject.create({
     data: { name, classId, teacherId, creditHours },
   });
@@ -1070,6 +1117,17 @@ export async function updateSubject(req: AuthRequest, res: Response): Promise<vo
     if (!targetTeacher) {
       send(res, 400, undefined, 'Teacher not found in this school');
       return;
+    }
+
+    // Only re-check the cap when the teacher is actually changing — a
+    // subject already assigned to this teacher shouldn't count against its
+    // own limit when nothing about the assignment is moving.
+    if (teacherId !== existing.teacherId) {
+      const existingSubjects = await countTeacherSubjects(schoolId, teacherId);
+      if (existingSubjects >= MAX_SUBJECTS_PER_TEACHER) {
+        send(res, 400, undefined, `Teacher cannot be assigned more than ${MAX_SUBJECTS_PER_TEACHER} subjects.`);
+        return;
+      }
     }
   }
 

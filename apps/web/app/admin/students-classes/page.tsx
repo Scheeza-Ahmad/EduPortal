@@ -52,7 +52,10 @@ interface TeacherOption {
   id: string;
   name: string;
   teacherProfile: { wing: Wing } | null;
+  teachingSubjects: { id: string }[];
 }
+
+const MAX_SUBJECTS_PER_TEACHER = 3;
 
 interface Student {
   id: string;
@@ -286,6 +289,17 @@ export default function StudentsClassesPage() {
 
   function teachersForWing(wing: 'junior' | 'senior'): TeacherOption[] {
     return teachers.filter((t) => t.teacherProfile?.wing === wing || t.teacherProfile?.wing === 'both');
+  }
+
+  /** A teacher's subject count as it would be *after* this wizard session
+   * saves — their existing count plus how many rows in the current draft
+   * already have them assigned (excluding the row being edited, so picking
+   * "None" then re-picking the same teacher for one row isn't blocked by
+   * itself). */
+  function subjectCountFor(teacherId: string, excludeRowIndex?: number): number {
+    const existing = teachers.find((t) => t.id === teacherId)?.teachingSubjects.length ?? 0;
+    const inDraft = subjectRows.filter((r, i) => i !== excludeRowIndex && r.teacherId === teacherId).length;
+    return existing + inDraft;
   }
 
   function sectionsFor(number: number): ClassSection[] {
@@ -885,8 +899,12 @@ export default function StudentsClassesPage() {
                 </div>
 
                 <div className="space-y-2">
-                  {subjectRows.map((row, i) => (
-                    <div key={i} className="flex items-center gap-2">
+                  {subjectRows.map((row, i) => {
+                    const rowTeacherCount = row.teacherId ? subjectCountFor(row.teacherId, i) : 0;
+                    const rowTeacherAtCap = rowTeacherCount >= MAX_SUBJECTS_PER_TEACHER;
+                    return (
+                    <div key={i} className="space-y-1">
+                    <div className="flex items-center gap-2">
                       <Input
                         placeholder="Subject Name"
                         value={row.name}
@@ -897,16 +915,19 @@ export default function StudentsClassesPage() {
                         value={row.teacherId || 'none'}
                         onValueChange={(v) => updateSubjectRow(i, { teacherId: v === 'none' ? '' : v })}
                       >
-                        <SelectTrigger className="w-[160px] shrink-0">
+                        <SelectTrigger className="w-[220px] shrink-0">
                           <SelectValue placeholder="Teacher" />
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="none">Select teacher</SelectItem>
-                          {teachersForWing(activeWing).map((t) => (
-                            <SelectItem key={t.id} value={t.id}>
-                              {t.name}
-                            </SelectItem>
-                          ))}
+                          {teachersForWing(activeWing).map((t) => {
+                            const count = subjectCountFor(t.id, i);
+                            return (
+                              <SelectItem key={t.id} value={t.id} disabled={count >= MAX_SUBJECTS_PER_TEACHER}>
+                                {t.name} ({count}/{MAX_SUBJECTS_PER_TEACHER} subjects)
+                              </SelectItem>
+                            );
+                          })}
                         </SelectContent>
                       </Select>
                       <Input
@@ -927,7 +948,15 @@ export default function StudentsClassesPage() {
                         Remove
                       </Button>
                     </div>
-                  ))}
+                    {rowTeacherAtCap && (
+                      <p className="text-xs text-destructive">
+                        ⚠️ {teacherName(row.teacherId)} already has {MAX_SUBJECTS_PER_TEACHER} subjects
+                        assigned.
+                      </p>
+                    )}
+                    </div>
+                    );
+                  })}
                 </div>
 
                 <Button type="button" variant="outline" size="sm" onClick={addSubjectRow}>
@@ -938,7 +967,13 @@ export default function StudentsClassesPage() {
                   <Button type="button" variant="outline" onClick={() => setWizardStep(1)}>
                     ← Back
                   </Button>
-                  <Button type="button" onClick={() => setWizardStep(3)}>
+                  <Button
+                    type="button"
+                    onClick={() => setWizardStep(3)}
+                    disabled={subjectRows.some(
+                      (row, i) => row.teacherId && subjectCountFor(row.teacherId, i) >= MAX_SUBJECTS_PER_TEACHER
+                    )}
+                  >
                     Next →
                   </Button>
                 </DialogFooter>
