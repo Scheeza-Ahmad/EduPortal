@@ -15,6 +15,7 @@ import {
   getMyLeaveRequests,
   getMySubjects,
   getNotifications,
+  getStudentTimetable,
   getSubjectActivities,
   getSubmissions,
   markNotificationRead,
@@ -38,6 +39,8 @@ router.get('/grades', getGrades);
 router.get('/grade-card', requireFeature('featureReportCards'), getGradeCard);
 
 router.get('/attendance', requireFeature('featureAttendance'), getAttendance);
+
+router.get('/timetable', requireFeature('featureTimetable'), getStudentTimetable);
 
 router.get('/notifications', getNotifications);
 router.patch('/notifications/:id/read', markNotificationRead);

@@ -6,6 +6,7 @@ import {
   approveWingReport,
   assignCoordinator,
   autoGenerateTimetable,
+  confirmAutoGenerateTimetable,
   bulkImportStudents,
   bulkImportStudentsByName,
   checkTimetableConflict,
@@ -124,6 +125,7 @@ router.delete('/subjects/:id', deleteSubject);
 // swallowed as a classId value.
 router.get('/timetable/check-conflict', requireFeature('featureTimetable'), checkTimetableConflict);
 router.post('/timetable/auto-generate', requireFeature('featureTimetable'), autoGenerateTimetable);
+router.post('/timetable/auto-generate/confirm', requireFeature('featureTimetable'), confirmAutoGenerateTimetable);
 router.get('/timetable/:classId', requireFeature('featureTimetable'), getTimetableForClass);
 router.post('/timetable', requireFeature('featureTimetable'), upsertTimetableSlot);
 router.delete('/timetable/:slotId', requireFeature('featureTimetable'), deleteTimetableSlot);

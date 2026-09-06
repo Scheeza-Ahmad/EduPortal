@@ -70,12 +70,21 @@ const EMPTY_FORM: SlotForm = { subjectId: '', dayOfWeek: '1', startTime: '', end
 
 const DAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
+interface PreviewSlot {
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  subjectId: string;
+}
+
 interface AutoGenerateResult {
+  preview: true;
   generated: number;
   skipped: number;
   conflicts: { subject: string; reason: string }[];
   schedule: { day: string; period: number; time: string; subject: string; teacher: string }[];
   teacherLoad: Record<string, number>;
+  slots: PreviewSlot[];
 }
 
 export default function TimetablePage() {
@@ -99,6 +108,11 @@ export default function TimetablePage() {
   const [autoGenSubmitting, setAutoGenSubmitting] = useState(false);
   const [autoGenResult, setAutoGenResult] = useState<AutoGenerateResult | null>(null);
   const [autoGenError, setAutoGenError] = useState<string | null>(null);
+  // Fix 4 — once the admin approves a preview, this holds the "saved"
+  // confirmation instead of the preview, so the dialog can't be confused
+  // for still-unsaved data.
+  const [autoGenConfirmed, setAutoGenConfirmed] = useState<{ slotCount: number } | null>(null);
+  const [autoGenConfirming, setAutoGenConfirming] = useState(false);
 
   useEffect(() => {
     api
@@ -248,24 +262,49 @@ export default function TimetablePage() {
   function openAutoGenDialog() {
     setAutoGenResult(null);
     setAutoGenError(null);
+    setAutoGenConfirmed(null);
     setAutoGenDialogOpen(true);
   }
 
+  // Fix 4 step 1 — generates a PREVIEW only; nothing is written to the DB
+  // until the admin clicks "Approve & Save" below.
   async function handleAutoGenerate() {
     setAutoGenSubmitting(true);
     setAutoGenError(null);
+    setAutoGenConfirmed(null);
     try {
       const res = await api.post<{ success: boolean; data: AutoGenerateResult }>(
         '/api/admin/timetable/auto-generate',
         { classId: selectedClassId }
       );
       setAutoGenResult(res.data.data);
-      await loadSlots(selectedClassId);
     } catch (err) {
       const axiosErr = err as AxiosError<{ error?: string }>;
       setAutoGenError(axiosErr.response?.data?.error ?? 'Failed to generate timetable.');
     } finally {
       setAutoGenSubmitting(false);
+    }
+  }
+
+  // Fix 4 step 2 — actually persists the previewed slots, then refreshes the
+  // live weekly grid below and lets teachers/students see the new timetable.
+  async function handleApproveAndSave() {
+    if (!autoGenResult) return;
+    setAutoGenConfirming(true);
+    setAutoGenError(null);
+    try {
+      const res = await api.post<{ success: boolean; data: { slotCount: number } }>(
+        '/api/admin/timetable/auto-generate/confirm',
+        { classId: selectedClassId, slots: autoGenResult.slots }
+      );
+      setAutoGenConfirmed(res.data.data);
+      setAutoGenResult(null);
+      await loadSlots(selectedClassId);
+    } catch (err) {
+      const axiosErr = err as AxiosError<{ error?: string }>;
+      setAutoGenError(axiosErr.response?.data?.error ?? 'Failed to save timetable.');
+    } finally {
+      setAutoGenConfirming(false);
     }
   }
 
@@ -490,10 +529,23 @@ export default function TimetablePage() {
             </DialogTitle>
           </DialogHeader>
 
-          {autoGenResult ? (
+          {autoGenConfirmed ? (
             <div className="space-y-3">
               <p className="text-sm text-green-600">
-                ✅ Generated {autoGenResult.generated} slot{autoGenResult.generated === 1 ? '' : 's'}.
+                ✅ Timetable saved and published! ({autoGenConfirmed.slotCount} slots) Students and
+                teachers can now see it.
+              </p>
+              <DialogFooter>
+                <Button onClick={() => setAutoGenDialogOpen(false)}>Close</Button>
+              </DialogFooter>
+            </div>
+          ) : autoGenResult ? (
+            <div className="space-y-3">
+              <p className="text-sm font-medium text-yellow-700 dark:text-yellow-400">
+                📋 Preview — this timetable has NOT been saved yet.
+              </p>
+              <p className="text-sm text-muted-foreground">
+                Generated {autoGenResult.generated} slot{autoGenResult.generated === 1 ? '' : 's'}.
                 {autoGenResult.skipped > 0 && (
                   <> ⚠️ {autoGenResult.skipped} subject{autoGenResult.skipped === 1 ? '' : 's'} skipped.</>
                 )}
@@ -555,8 +607,19 @@ export default function TimetablePage() {
                 </div>
               )}
 
-              <DialogFooter>
-                <Button onClick={() => setAutoGenDialogOpen(false)}>Close</Button>
+              {autoGenError && (
+                <p className="text-sm text-destructive" role="alert">
+                  {autoGenError}
+                </p>
+              )}
+
+              <DialogFooter className="gap-2">
+                <Button variant="outline" onClick={handleAutoGenerate} disabled={autoGenSubmitting || autoGenConfirming}>
+                  {autoGenSubmitting ? 'Regenerating...' : 'Regenerate'}
+                </Button>
+                <Button onClick={handleApproveAndSave} disabled={autoGenConfirming || autoGenSubmitting}>
+                  {autoGenConfirming ? 'Saving...' : 'Approve & Save'}
+                </Button>
               </DialogFooter>
             </div>
           ) : (

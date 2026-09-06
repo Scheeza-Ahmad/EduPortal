@@ -11,6 +11,7 @@ import { useLanguage } from '@/lib/LanguageContext';
 import { t } from '@/lib/translations';
 import { LogoutButton } from '@/components/logout-button';
 import { useBranding } from '@/lib/BrandingContext';
+import { useIsDarkMode } from '@/lib/useIsDarkMode';
 import { WrongPortalAccess } from '@/components/wrong-portal';
 import { PortalToggles } from '@/components/portal-toggles';
 
@@ -31,6 +32,7 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
   const { accessToken, user, setAuth, clearAuth } = useAuthStore();
   const { language } = useLanguage();
   const { resetToDefaultBranding } = useBranding();
+  const isDark = useIsDarkMode();
   const [checkingSession, setCheckingSession] = useState(true);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -113,11 +115,14 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
         />
       )}
 
+      {/* Fix 6 — background is an INLINE style, not a Tailwind class, so no
+          CSS specificity or override elsewhere can leave this transparent. */}
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 w-64 shrink-0 -translate-x-full border-r border-gray-200 bg-white p-4 text-gray-900 shadow-xl transition-transform duration-200 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 lg:static lg:w-56 lg:translate-x-0 lg:shadow-none',
+          'fixed inset-y-0 left-0 z-50 w-64 shrink-0 -translate-x-full border-r border-gray-200 p-4 text-gray-900 shadow-xl transition-transform duration-200 dark:border-gray-800 dark:text-gray-100 lg:static lg:w-56 lg:translate-x-0 lg:shadow-none',
           mobileNavOpen && 'translate-x-0'
         )}
+        style={{ backgroundColor: isDark ? '#030712' : '#ffffff' }}
       >
         <div className="mb-6 flex items-center justify-between px-2">
           <span className="text-lg font-semibold">EduPortal</span>

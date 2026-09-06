@@ -795,3 +795,23 @@ export async function getAiInsights(req: AuthRequest, res: Response): Promise<vo
     recommendations: recommendations.slice(0, 5),
   });
 }
+
+// =================================================================
+// Timetable — Fix 7: read-only weekly grid for the student's own class.
+// GET /api/student/timetable
+// =================================================================
+
+export async function getStudentTimetable(req: AuthRequest, res: Response): Promise<void> {
+  const profile = await requireStudentProfile(req, res);
+  if (!profile) return;
+
+  const slots = await prisma.timetableSlot.findMany({
+    where: { classId: profile.classId },
+    include: {
+      subject: { select: { name: true, teacher: { select: { id: true, name: true } } } },
+    },
+    orderBy: [{ dayOfWeek: 'asc' }, { startTime: 'asc' }],
+  });
+
+  send(res, 200, { slots });
+}

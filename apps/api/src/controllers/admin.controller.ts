@@ -52,7 +52,10 @@ async function countTeacherSubjects(
     where: {
       teacherId,
       isActive: true,
-      class: { schoolId },
+      // A subject's own isActive flag isn't enough — deleteClass only soft-
+      // deletes the Class row, not its Subject rows, so a subject tied to a
+      // deleted class would otherwise still count against the teacher's cap.
+      class: { schoolId, isActive: true },
       ...(excludeSubjectId ? { id: { not: excludeSubjectId } } : {}),
     },
   });
@@ -236,13 +239,23 @@ export async function createStudent(req: AuthRequest, res: Response): Promise<vo
   let newParentName: string | undefined;
 
   if (parentEmail) {
-    const existingParent = await prisma.user.findUnique({ where: { email: parentEmail } });
+    // StudentProfile.parentId references ParentProfile.id, NOT User.id — a
+    // parent's login is a User row, but the link students hang off of is
+    // their one-to-one ParentProfile row.
+    const existingParent = await prisma.user.findUnique({
+      where: { email: parentEmail },
+      include: { parentProfile: true },
+    });
     if (existingParent) {
       if (existingParent.role !== 'parent' || existingParent.schoolId !== schoolId) {
         send(res, 400, undefined, 'That email belongs to an account that is not a parent at this school');
         return;
       }
-      parentId = existingParent.id;
+      // Defensively backfill a ParentProfile if this parent account somehow
+      // doesn't have one yet, rather than failing the whole request.
+      parentId = existingParent.parentProfile
+        ? existingParent.parentProfile.id
+        : (await prisma.parentProfile.create({ data: { userId: existingParent.id } })).id;
     } else {
       // Auto-create the parent account. Uses parentName if given, else a
       // sensible default derived from the student's name; uses the admin
@@ -263,9 +276,11 @@ export async function createStudent(req: AuthRequest, res: Response): Promise<vo
             password: await bcrypt.hash(newParentPlaintextPassword!, 12),
             role: 'parent',
             schoolId,
+            parentProfile: { create: {} },
           },
+          include: { parentProfile: true },
         });
-        parentId = parentUser.id;
+        parentId = parentUser.parentProfile!.id;
       }
 
       return tx.user.create({
@@ -1219,6 +1234,22 @@ export async function createClassWithSubjects(req: AuthRequest, res: Response): 
   const { number, section, classTeacherId, maxStudents, subjects } = parsed.data;
   const wing = wingForClassNumber(number);
 
+  // The DB unique constraint is on (schoolId, number, section) regardless of
+  // isActive, so a soft-deleted section with the same number+letter would
+  // otherwise make every recreation attempt fail with "already exists".
+  // Only an ACTIVE duplicate should actually block creation — a deleted one
+  // gets reactivated instead of inserted fresh.
+  const activeDuplicate = await prisma.class.findFirst({
+    where: { schoolId, number, section, isActive: true },
+  });
+  if (activeDuplicate) {
+    send(res, 400, undefined, 'A section with this class number and letter already exists');
+    return;
+  }
+  const inactiveDuplicate = await prisma.class.findFirst({
+    where: { schoolId, number, section, isActive: false },
+  });
+
   if (classTeacherId) {
     const teacher = await prisma.user.findFirst({
       where: { id: classTeacherId, schoolId, role: { in: ['teacher', 'coordinator'] } },
@@ -1260,16 +1291,29 @@ export async function createClassWithSubjects(req: AuthRequest, res: Response): 
   let newClass;
   try {
     newClass = await prisma.$transaction(async (tx) => {
-      const created = await tx.class.create({
-        data: {
-          number,
-          section,
-          wing,
-          classTeacherId,
-          maxStudents: maxStudents ?? 30,
-          schoolId,
-        },
-      });
+      let created;
+      if (inactiveDuplicate) {
+        // Reactivate the old (soft-deleted) row instead of inserting a new
+        // one — the unique index would reject a fresh insert either way.
+        created = await tx.class.update({
+          where: { id: inactiveDuplicate.id },
+          data: { wing, classTeacherId, maxStudents: maxStudents ?? 30, isActive: true },
+        });
+        // Any subjects left over from the deleted version of this section
+        // shouldn't resurface (or keep counting against their teacher's cap).
+        await tx.subject.updateMany({ where: { classId: created.id }, data: { isActive: false } });
+      } else {
+        created = await tx.class.create({
+          data: {
+            number,
+            section,
+            wing,
+            classTeacherId,
+            maxStudents: maxStudents ?? 30,
+            schoolId,
+          },
+        });
+      }
 
       if (subjects && subjects.length > 0) {
         await tx.subject.createMany({
@@ -1378,8 +1422,13 @@ export async function deleteClass(req: AuthRequest, res: Response): Promise<void
     return;
   }
 
-  // Soft delete, per the project-wide convention (isActive=false, never hard delete).
-  await prisma.class.update({ where: { id }, data: { isActive: false } });
+  // Soft delete, per the project-wide convention (isActive=false, never hard
+  // delete) — cascade to this class's subjects too, so they stop counting
+  // against a teacher's subject cap once the class is gone.
+  await prisma.$transaction([
+    prisma.class.update({ where: { id }, data: { isActive: false } }),
+    prisma.subject.updateMany({ where: { classId: id }, data: { isActive: false } }),
+  ]);
 
   await auditLog({
     userId: req.user!.userId,
@@ -3588,14 +3637,6 @@ export async function autoGenerateTimetable(req: AuthRequest, res: Response): Pr
     return;
   }
 
-  // Build the full week's empty slot grid: one entry per (day, period).
-  const grid: { dayOfWeek: number; startTime: string; endTime: string }[] = [];
-  for (const day of workingDayIndices) {
-    for (const period of dailyPeriods) {
-      grid.push({ dayOfWeek: day, ...period });
-    }
-  }
-
   // Queue: each subject appears `creditHours` times, spread as evenly as
   // possible across days rather than stacked on one day.
   type QueueItem = { subjectId: string; teacherId: string; name: string };
@@ -3613,7 +3654,10 @@ export async function autoGenerateTimetable(req: AuthRequest, res: Response): Pr
   // teacher double-booking across the whole school, not just this class.
   const otherSlots = await prisma.timetableSlot.findMany({
     where: { schoolId, classId: { not: classId } },
-    include: { subject: { select: { teacherId: true } }, class: { select: { number: true, section: true } } },
+    include: {
+      subject: { select: { teacherId: true, name: true } },
+      class: { select: { number: true, section: true } },
+    },
   });
 
   // Each teacher's current school-wide period load (excluding this class,
@@ -3640,82 +3684,92 @@ export async function autoGenerateTimetable(req: AuthRequest, res: Response): Pr
     (a, b) => (teacherLoadMap.get(a.teacherId) ?? 0) - (teacherLoadMap.get(b.teacherId) ?? 0)
   );
 
+  const DAY_INDEX_TO_NAME = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const classLabel = `Class ${targetClass.number}-${targetClass.section}`;
+
+  /** Finds a school-wide slot (in some OTHER class) that would block this
+   * teacher at this day+period, for a human-readable conflict message. */
+  function findBlockingConflict(teacherId: string, day: number, period: { startTime: string; endTime: string }) {
+    return otherSlots.find(
+      (s) =>
+        s.dayOfWeek === day &&
+        s.subject.teacherId === teacherId &&
+        s.startTime < period.endTime &&
+        s.endTime > period.startTime
+    );
+  }
+
   const placed: { dayOfWeek: number; startTime: string; endTime: string; subjectId: string; teacherId: string }[] =
     [];
   const skipped: { subject: string; reason: string }[] = [];
-  const usedSlotIndices = new Set<number>();
+  const usedSlotKey = new Set<string>(); // `${day}-${startTime}` — this class already has something here
   const usedByDaySubject = new Set<string>(); // `${day}-${subjectId}` — avoid same subject twice same day
+
+  // Fix 3 — how many periods of THIS class have landed on each working day
+  // so far. Days are always tried least-filled-first, so a subject never
+  // clusters into the first 2-3 days while later days sit empty.
+  const dayFillCount = new Map<number, number>(workingDayIndices.map((d) => [d, 0]));
 
   for (const item of sortedQueue) {
     let placedThisItem = false;
+    const candidateDays = [...workingDayIndices].sort(
+      (a, b) => (dayFillCount.get(a) ?? 0) - (dayFillCount.get(b) ?? 0)
+    );
 
-    for (let i = 0; i < grid.length; i++) {
-      if (usedSlotIndices.has(i)) continue;
-      const cell = grid[i];
-      const dayKey = `${cell.dayOfWeek}-${item.subjectId}`;
+    for (const day of candidateDays) {
+      const dayKey = `${day}-${item.subjectId}`;
       if (usedByDaySubject.has(dayKey)) continue;
 
-      const teacherBusyElsewhere = otherSlots.some(
-        (s) =>
-          s.dayOfWeek === cell.dayOfWeek &&
-          s.subject.teacherId === item.teacherId &&
-          s.startTime < cell.endTime &&
-          s.endTime > cell.startTime
-      );
-      const teacherBusyThisRun = placed.some(
-        (s) =>
-          s.dayOfWeek === cell.dayOfWeek &&
-          s.teacherId === item.teacherId &&
-          s.startTime < cell.endTime &&
-          s.endTime > cell.startTime
-      );
-      if (teacherBusyElsewhere || teacherBusyThisRun) continue;
+      let placedInDay = false;
+      for (const period of dailyPeriods) {
+        const slotKey = `${day}-${period.startTime}`;
+        if (usedSlotKey.has(slotKey)) continue;
 
-      usedSlotIndices.add(i);
-      usedByDaySubject.add(dayKey);
-      placed.push({
-        dayOfWeek: cell.dayOfWeek,
-        startTime: cell.startTime,
-        endTime: cell.endTime,
-        subjectId: item.subjectId,
-        teacherId: item.teacherId,
-      });
-      teacherLoadMap.set(item.teacherId, (teacherLoadMap.get(item.teacherId) ?? 0) + 1);
-      placedThisItem = true;
-      break;
+        const teacherBusyElsewhere = Boolean(findBlockingConflict(item.teacherId, day, period));
+        const teacherBusyThisRun = placed.some(
+          (s) =>
+            s.dayOfWeek === day &&
+            s.teacherId === item.teacherId &&
+            s.startTime < period.endTime &&
+            s.endTime > period.startTime
+        );
+        if (teacherBusyElsewhere || teacherBusyThisRun) continue;
+
+        usedSlotKey.add(slotKey);
+        usedByDaySubject.add(dayKey);
+        dayFillCount.set(day, (dayFillCount.get(day) ?? 0) + 1);
+        placed.push({
+          dayOfWeek: day,
+          startTime: period.startTime,
+          endTime: period.endTime,
+          subjectId: item.subjectId,
+          teacherId: item.teacherId,
+        });
+        teacherLoadMap.set(item.teacherId, (teacherLoadMap.get(item.teacherId) ?? 0) + 1);
+        placedInDay = true;
+        placedThisItem = true;
+        break;
+      }
+      if (placedInDay) break;
     }
 
     if (!placedThisItem) {
-      skipped.push({ subject: item.name, reason: 'No conflict-free slot available' });
+      // Fix 5 — name the actual cross-class booking that blocked every slot
+      // this week, when one exists, instead of a generic message.
+      let reason = 'No conflict-free slot available across the week.';
+      outer: for (const day of workingDayIndices) {
+        for (const period of dailyPeriods) {
+          const conflict = findBlockingConflict(item.teacherId, day, period);
+          if (conflict) {
+            reason = `${teacherNameById.get(item.teacherId) ?? 'This teacher'} is teaching ${conflict.subject.name} in Class ${conflict.class.number}-${conflict.class.section} on ${DAY_INDEX_TO_NAME[day]} ${conflict.startTime}-${conflict.endTime} — slot skipped for ${classLabel}.`;
+            break outer;
+          }
+        }
+      }
+      skipped.push({ subject: item.name, reason });
     }
   }
 
-  await prisma.$transaction([
-    prisma.timetableSlot.deleteMany({ where: { classId } }),
-    ...placed.map((p) =>
-      prisma.timetableSlot.create({
-        data: {
-          schoolId,
-          classId,
-          subjectId: p.subjectId,
-          dayOfWeek: p.dayOfWeek,
-          startTime: p.startTime,
-          endTime: p.endTime,
-        },
-      })
-    ),
-  ]);
-
-  await auditLog({
-    userId: req.user!.userId,
-    action: 'TIMETABLE_AUTO_GENERATE',
-    targetTable: 'Class',
-    targetId: classId,
-    meta: { created: placed.length, skipped: skipped.length },
-    ip: req.ip,
-  });
-
-  const DAY_INDEX_TO_NAME = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const subjectNameById = new Map(subjects.map((s) => [s.id, s.name]));
 
   // Detailed, human-readable schedule report — grouped by day, numbered by
@@ -3739,11 +3793,122 @@ export async function autoGenerateTimetable(req: AuthRequest, res: Response): Pr
     if (name) teacherLoad[name] = load;
   }
 
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'TIMETABLE_AUTO_GENERATE_PREVIEW',
+    targetTable: 'Class',
+    targetId: classId,
+    meta: { generated: placed.length, skipped: skipped.length },
+    ip: req.ip,
+  });
+
+  // Fix 4 — this is a PREVIEW only, nothing is written to the DB yet. The
+  // frontend shows this to the admin and, on "Approve & Save", posts `slots`
+  // back to /auto-generate/confirm to actually persist it.
   send(res, 200, {
+    preview: true,
     generated: placed.length,
     skipped: skipped.length,
     conflicts: skipped,
     schedule,
     teacherLoad,
+    slots: placed.map((p) => ({
+      dayOfWeek: p.dayOfWeek,
+      startTime: p.startTime,
+      endTime: p.endTime,
+      subjectId: p.subjectId,
+    })),
   });
+}
+
+const confirmAutoGenerateSlotSchema = z.object({
+  dayOfWeek: z.number().int().min(0).max(6),
+  startTime: z.string().min(1),
+  endTime: z.string().min(1),
+  subjectId: z.string().min(1),
+});
+
+const confirmAutoGenerateSchema = z.object({
+  classId: z.string().min(1),
+  slots: z.array(confirmAutoGenerateSlotSchema).min(1),
+});
+
+// POST /api/admin/timetable/auto-generate/confirm — Fix 4's second step:
+// actually persists a previously-generated (and admin-approved) preview.
+// Re-validates every subject still belongs to this class before writing,
+// since time may have passed between preview and confirm.
+export async function confirmAutoGenerateTimetable(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = confirmAutoGenerateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid request');
+    return;
+  }
+  const { classId, slots } = parsed.data;
+
+  const targetClass = await prisma.class.findFirst({ where: { id: classId, schoolId } });
+  if (!targetClass) {
+    send(res, 404, undefined, 'Class not found');
+    return;
+  }
+
+  const subjectIds = [...new Set(slots.map((s) => s.subjectId))];
+  const validSubjects = await prisma.subject.findMany({
+    where: { id: { in: subjectIds }, classId, isActive: true },
+  });
+  if (validSubjects.length !== subjectIds.length) {
+    send(res, 400, undefined, 'One or more subjects in this preview no longer exist — please regenerate.');
+    return;
+  }
+
+  await prisma.$transaction([
+    prisma.timetableSlot.deleteMany({ where: { classId } }),
+    ...slots.map((s) =>
+      prisma.timetableSlot.create({
+        data: {
+          schoolId,
+          classId,
+          subjectId: s.subjectId,
+          dayOfWeek: s.dayOfWeek,
+          startTime: s.startTime,
+          endTime: s.endTime,
+        },
+      })
+    ),
+  ]);
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'TIMETABLE_AUTO_GENERATE_CONFIRMED',
+    targetTable: 'Class',
+    targetId: classId,
+    meta: { slotCount: slots.length },
+    ip: req.ip,
+  });
+
+  // Notify every teacher whose subject is now on this timetable, and every
+  // student in the class, that the published schedule has changed.
+  const classLabel = `Class ${targetClass.number}-${targetClass.section}`;
+  const teacherIds = [...new Set(validSubjects.map((s) => s.teacherId))];
+  const studentProfiles = await prisma.studentProfile.findMany({ where: { classId }, select: { userId: true } });
+
+  const notifications = [
+    ...teacherIds.map((teacherId) => ({
+      userId: teacherId,
+      type: 'timetable',
+      message: `The timetable for ${classLabel} has been published.`,
+    })),
+    ...studentProfiles.map((s) => ({
+      userId: s.userId,
+      type: 'timetable',
+      message: `Your class timetable has been published.`,
+    })),
+  ];
+  if (notifications.length > 0) {
+    await prisma.notification.createMany({ data: notifications });
+  }
+
+  send(res, 200, { message: 'Timetable saved and published!', slotCount: slots.length });
 }

@@ -12,6 +12,7 @@ import { useLanguage } from '@/lib/LanguageContext';
 import { t, TranslationKey } from '@/lib/translations';
 import { LogoutButton } from '@/components/logout-button';
 import { defaultBranding, useBranding } from '@/lib/BrandingContext';
+import { useIsDarkMode } from '@/lib/useIsDarkMode';
 import { WrongPortalAccess } from '@/components/wrong-portal';
 import { useFeatures } from '@/lib/FeaturesContext';
 import type { SchoolFeatures } from '@/lib/FeaturesContext';
@@ -22,6 +23,7 @@ const NAV_ITEMS: { href: string; key: TranslationKey; icon?: string; feature?: k
   { href: '/student/activities', key: 'activities' },
   { href: '/student/grades', key: 'grades' },
   { href: '/student/attendance', key: 'attendance', feature: 'featureAttendance' },
+  { href: '/student/timetable', key: 'timetable', feature: 'featureTimetable' },
   { href: '/student/fees', key: 'fees', feature: 'featureFinance' },
   { href: '/student/badges', key: 'badges', feature: 'featureBadges' },
   { href: '/student/insights', key: 'insights', icon: '🤖', feature: 'featureAiInsights' },
@@ -35,6 +37,7 @@ export default function StudentLayout({ children }: { children: ReactNode }) {
   const { language } = useLanguage();
   const { branding } = useBranding();
   const hasCustomBranding = branding.primaryColor !== defaultBranding.primaryColor;
+  const isDark = useIsDarkMode();
   const { hasFeature } = useFeatures();
   const [checkingSession, setCheckingSession] = useState(true);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
@@ -173,13 +176,17 @@ export default function StudentLayout({ children }: { children: ReactNode }) {
         />
       )}
 
+      {/* Fix 6 — background is an INLINE style, not a Tailwind class, so no
+          CSS specificity or override elsewhere can leave this transparent. */}
       <aside
         className={cn(
           'fixed inset-y-0 left-0 z-50 w-64 shrink-0 -translate-x-full border-r border-gray-200 p-4 shadow-xl dark:border-gray-800 transition-transform duration-200 lg:static lg:w-56 lg:translate-x-0 lg:shadow-none',
-          !hasCustomBranding && 'bg-white dark:bg-gray-950',
           mobileNavOpen && 'translate-x-0'
         )}
-        style={hasCustomBranding && branding.sidebarColor ? { backgroundColor: branding.sidebarColor } : undefined}
+        style={{
+          backgroundColor:
+            hasCustomBranding && branding.sidebarColor ? branding.sidebarColor : isDark ? '#030712' : '#ffffff',
+        }}
       >
         <div className="mb-6 flex items-center justify-between px-2">
           {hasCustomBranding && branding.logoUrl ? (
