@@ -168,15 +168,15 @@ export default function StudentLayout({ children }: { children: ReactNode }) {
     <div className="flex min-h-screen">
       {mobileNavOpen && (
         <div
-          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+          className="fixed inset-0 z-40 bg-black/60 lg:hidden"
           onClick={() => setMobileNavOpen(false)}
         />
       )}
 
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 w-64 shrink-0 -translate-x-full border-r border-gray-200 p-4 dark:border-gray-700 transition-transform duration-200 lg:static lg:w-56 lg:translate-x-0',
-          !hasCustomBranding && 'bg-white dark:bg-gray-900',
+          'fixed inset-y-0 left-0 z-50 w-64 shrink-0 -translate-x-full border-r border-gray-200 p-4 shadow-xl dark:border-gray-800 transition-transform duration-200 lg:static lg:w-56 lg:translate-x-0 lg:shadow-none',
+          !hasCustomBranding && 'bg-white dark:bg-gray-950',
           mobileNavOpen && 'translate-x-0'
         )}
         style={hasCustomBranding && branding.sidebarColor ? { backgroundColor: branding.sidebarColor } : undefined}
@@ -213,12 +213,9 @@ export default function StudentLayout({ children }: { children: ReactNode }) {
                 className={cn(
                   'flex items-center justify-between rounded-md px-3 py-2 text-sm font-medium transition-colors',
                   isActive
-                    ? hasCustomBranding
-                      ? 'text-white'
-                      : 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                    ? 'bg-green-600 text-white font-medium'
+                    : 'text-muted-foreground hover:bg-gray-100 dark:hover:bg-gray-800'
                 )}
-                style={isActive && hasCustomBranding ? { backgroundColor: branding.primaryColor } : undefined}
               >
                 <span>
                   {item.icon ? `${item.icon} ` : ''}

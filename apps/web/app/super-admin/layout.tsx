@@ -108,14 +108,14 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
     <div className="flex min-h-screen">
       {mobileNavOpen && (
         <div
-          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+          className="fixed inset-0 z-40 bg-black/60 lg:hidden"
           onClick={() => setMobileNavOpen(false)}
         />
       )}
 
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 w-64 shrink-0 -translate-x-full border-r border-gray-200 bg-white p-4 text-gray-900 transition-transform duration-200 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 lg:static lg:w-56 lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-50 w-64 shrink-0 -translate-x-full border-r border-gray-200 bg-white p-4 text-gray-900 shadow-xl transition-transform duration-200 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-100 lg:static lg:w-56 lg:translate-x-0 lg:shadow-none',
           mobileNavOpen && 'translate-x-0'
         )}
       >
@@ -147,8 +147,8 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
                 className={cn(
                   'flex items-center justify-between rounded-md px-3 py-2 text-sm font-medium transition-colors',
                   isActive
-                    ? 'bg-gray-100 dark:bg-gray-800'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                    ? 'bg-green-600 text-white font-medium'
+                    : 'text-muted-foreground hover:bg-gray-100 dark:hover:bg-gray-800'
                 )}
               >
                 <span>{t(item.key, language)}</span>

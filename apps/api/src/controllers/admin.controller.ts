@@ -194,6 +194,10 @@ const createStudentSchema = z.object({
   // later from the student's edit screen.
   parentName: z.string().min(1).optional(),
   parentEmail: z.string().email().optional(),
+  // Optional — lets the admin UI's auto-generated password (Parent@{rollNo}
+  // or Parent@{4 random digits}) actually be the credential that gets set,
+  // instead of always falling back to a random one the admin never sees.
+  parentPassword: z.string().min(8).optional(),
 });
 
 export async function createStudent(req: AuthRequest, res: Response): Promise<void> {
@@ -205,7 +209,7 @@ export async function createStudent(req: AuthRequest, res: Response): Promise<vo
     send(res, 400, undefined, 'Invalid student data');
     return;
   }
-  const { name, email, password, classId, rollNo, dob, phone, address, parentName, parentEmail } =
+  const { name, email, password, classId, rollNo, dob, phone, address, parentName, parentEmail, parentPassword } =
     parsed.data;
 
   const targetClass = await prisma.class.findFirst({
@@ -241,8 +245,9 @@ export async function createStudent(req: AuthRequest, res: Response): Promise<vo
       parentId = existingParent.id;
     } else {
       // Auto-create the parent account. Uses parentName if given, else a
-      // sensible default derived from the student's name.
-      newParentPlaintextPassword = crypto.randomBytes(6).toString('hex');
+      // sensible default derived from the student's name; uses the admin
+      // UI's auto-generated parentPassword if given, else a random one.
+      newParentPlaintextPassword = parentPassword ?? crypto.randomBytes(6).toString('hex');
       newParentEmail = parentEmail;
       newParentName = parentName?.trim() || `${name}'s Parent`;
     }
@@ -560,6 +565,187 @@ export async function bulkImportStudents(req: AuthRequest, res: Response): Promi
   send(res, 201, { createdCount: created.length, errors });
 }
 
+/** Turns "Ahmed Khan" into { first: "ahmed", last: "khan", slug: "ahmed.khan" }. */
+function splitNameForEmail(name: string): { first: string; last: string; slug: string } {
+  const clean = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, '')
+    .split(/\s+/)
+    .filter(Boolean);
+  const first = clean[0] ?? 'student';
+  const last = clean.length > 1 ? clean[clean.length - 1] : '';
+  const slug = last ? `${first}.${last}` : first;
+  return { first, last, slug };
+}
+
+/** Extracts the trailing numeric portion of a roll number ("JR-007" -> 7). */
+function trailingRollNumber(rollNo: string): number {
+  const match = rollNo.match(/(\d+)$/);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+function padRollNo(n: number): string {
+  return String(n).padStart(3, '0');
+}
+
+const bulkImportNamesSchema = z.object({
+  classId: z.string().min(1),
+  names: z.array(z.string().min(1)).min(1).max(200),
+  schoolDomain: z.string().min(2).max(40).optional(),
+  createParents: z.boolean().optional(),
+});
+
+// POST /api/admin/students/bulk-import-names — the redesigned bulk import:
+// a plain newline-separated list of names per section instead of a CSV.
+// Sorts alphabetically, continues roll numbers from the class's current max,
+// and auto-generates email/password (and optionally a parent account) for
+// each student.
+export async function bulkImportStudentsByName(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = bulkImportNamesSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid bulk import data');
+    return;
+  }
+  const { classId, names, createParents } = parsed.data;
+
+  const targetClass = await prisma.class.findFirst({
+    where: { id: classId, schoolId },
+    include: {
+      _count: { select: { studentProfiles: true } },
+      studentProfiles: { select: { rollNo: true } },
+    },
+  });
+  if (!targetClass) {
+    send(res, 400, undefined, 'Class not found in this school');
+    return;
+  }
+
+  const [school, settings] = await Promise.all([
+    prisma.school.findUnique({ where: { id: schoolId }, select: { name: true, featureParentPortal: true } }),
+    prisma.schoolSettings.findUnique({ where: { schoolId }, select: { schoolDomain: true } }),
+  ]);
+  const schoolDomain = parsed.data.schoolDomain ?? settings?.schoolDomain ?? 'school';
+  const shouldCreateParents = Boolean(createParents && school?.featureParentPortal);
+
+  // Sort alphabetically, then compute how many can actually fit.
+  const sortedNames = [...names].map((n) => n.trim()).filter(Boolean).sort((a, b) => a.localeCompare(b));
+
+  const remainingCapacity = targetClass.maxStudents - targetClass._count.studentProfiles;
+  if (sortedNames.length > remainingCapacity) {
+    send(
+      res,
+      400,
+      undefined,
+      `Only ${remainingCapacity} more student(s) can be added to this section (max ${targetClass.maxStudents}).`
+    );
+    return;
+  }
+
+  let nextRollNo = Math.max(0, ...targetClass.studentProfiles.map((p) => trailingRollNumber(p.rollNo))) + 1;
+
+  const created: { name: string; email: string; password: string; rollNo: string }[] = [];
+  const parents: { name: string; email: string; password: string; forStudent: string }[] = [];
+  const failed: { name: string; error: string }[] = [];
+
+  for (const name of sortedNames) {
+    const rollNo = padRollNo(nextRollNo);
+    const { first, slug } = splitNameForEmail(name);
+
+    let email = `${slug}@${schoolDomain}.edu`;
+    if (await prisma.user.findUnique({ where: { email } })) {
+      email = `student${rollNo}@${schoolDomain}.edu`;
+    }
+    const password = `Student@${rollNo}`;
+
+    try {
+      const hashedPassword = await bcrypt.hash(password, 12);
+
+      let parentId: string | undefined;
+      let parentEmail: string | undefined;
+      let parentPassword: string | undefined;
+
+      const studentUser = await prisma.$transaction(async (tx) => {
+        if (shouldCreateParents) {
+          parentEmail = `parent.${first}@${schoolDomain}.edu`;
+          if (await tx.user.findUnique({ where: { email: parentEmail } })) {
+            parentEmail = `parent.${first}${rollNo}@${schoolDomain}.edu`;
+          }
+          parentPassword = `Parent@${rollNo}`;
+          const parentUser = await tx.user.create({
+            data: {
+              name: `${name}'s Parent`,
+              email: parentEmail,
+              password: await bcrypt.hash(parentPassword, 12),
+              role: 'parent',
+              schoolId,
+              parentProfile: { create: {} },
+            },
+            include: { parentProfile: true },
+          });
+          parentId = parentUser.parentProfile!.id;
+        }
+
+        return tx.user.create({
+          data: {
+            name,
+            email,
+            password: hashedPassword,
+            role: 'student',
+            schoolId,
+            studentProfile: { create: { classId, rollNo, parentId } },
+          },
+        });
+      });
+
+      created.push({ name, email, password, rollNo });
+      if (shouldCreateParents && parentEmail && parentPassword) {
+        parents.push({ name: `${name}'s Parent`, email: parentEmail, password: parentPassword, forStudent: name });
+      }
+      nextRollNo += 1;
+
+      try {
+        await sendWelcomeEmail({
+          name,
+          email,
+          role: 'student',
+          schoolName: school?.name ?? 'your school',
+          password,
+        });
+        if (shouldCreateParents && parentEmail && parentPassword) {
+          await sendWelcomeEmail({
+            name: `${name}'s Parent`,
+            email: parentEmail,
+            role: 'parent',
+            schoolName: school?.name ?? 'your school',
+            password: parentPassword,
+          });
+        }
+      } catch (err) {
+        console.warn('[bulkImportStudentsByName] Welcome email failed:', err);
+      }
+
+      void studentUser;
+    } catch (err) {
+      failed.push({ name, error: isUniqueConstraintError(err) ? 'Email already in use' : 'Failed to create' });
+    }
+  }
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'STUDENT_BULK_IMPORT_NAMES',
+    targetTable: 'Class',
+    targetId: classId,
+    meta: { createdCount: created.length, parentCount: parents.length, failedCount: failed.length },
+    ip: req.ip,
+  });
+
+  send(res, 201, { created, parents, failed });
+}
+
 // =================================================================
 // 3. Teacher Management
 // =================================================================
@@ -577,6 +763,7 @@ export async function getTeachers(req: AuthRequest, res: Response): Promise<void
       // toward "how many subjects does this teacher currently have".
       teachingSubjects: { where: { isActive: true }, select: { id: true, name: true, classId: true } },
       teacherProfile: true,
+      subjectPool: { orderBy: { createdAt: 'asc' } },
     },
     orderBy: { createdAt: 'desc' },
     take: 100,
@@ -740,6 +927,209 @@ export async function deleteTeacher(req: AuthRequest, res: Response): Promise<vo
   });
 
   send(res, 200, { message: 'Teacher deactivated' });
+}
+
+// =================================================================
+// 3b. Teacher Subject Pool — subjects a teacher is ELIGIBLE to teach.
+// Distinct from Subject, which is an actual class+subject+teacher
+// assignment; admin picks from this pool when assigning subjects to a class.
+// =================================================================
+
+const MAX_SUBJECT_POOL_SIZE = 3;
+
+export async function getTeacherSubjectPool(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const { id } = req.params;
+  const teacher = await prisma.user.findFirst({
+    where: { id, schoolId, role: { in: ['teacher', 'coordinator'] } },
+  });
+  if (!teacher) {
+    send(res, 404, undefined, 'Teacher not found');
+    return;
+  }
+
+  const subjects = await prisma.teacherSubject.findMany({
+    where: { teacherId: id, schoolId },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  send(res, 200, { subjects });
+}
+
+const addTeacherSubjectSchema = z.object({
+  subjectName: z.string().min(1).max(60),
+});
+
+export async function addTeacherSubjectPool(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = addTeacherSubjectSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid subject name');
+    return;
+  }
+  const { subjectName } = parsed.data;
+
+  const { id } = req.params;
+  const teacher = await prisma.user.findFirst({
+    where: { id, schoolId, role: { in: ['teacher', 'coordinator'] } },
+  });
+  if (!teacher) {
+    send(res, 404, undefined, 'Teacher not found');
+    return;
+  }
+
+  const currentCount = await prisma.teacherSubject.count({ where: { teacherId: id, schoolId } });
+  if (currentCount >= MAX_SUBJECT_POOL_SIZE) {
+    send(res, 400, undefined, `A teacher can have at most ${MAX_SUBJECT_POOL_SIZE} subjects in their pool.`);
+    return;
+  }
+
+  try {
+    const created = await prisma.teacherSubject.create({
+      data: { teacherId: id, schoolId, subjectName: subjectName.trim() },
+    });
+
+    await auditLog({
+      userId: req.user!.userId,
+      action: 'TEACHER_SUBJECT_ADDED',
+      targetTable: 'TeacherSubject',
+      targetId: created.id,
+      meta: { teacherId: id, subjectName: created.subjectName },
+      ip: req.ip,
+    });
+
+    send(res, 201, created);
+  } catch (err) {
+    if (isUniqueConstraintError(err)) {
+      send(res, 400, undefined, 'This subject is already in the teacher\'s pool');
+      return;
+    }
+    throw err;
+  }
+}
+
+export async function removeTeacherSubjectPool(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const { id, subjectId } = req.params;
+  const existing = await prisma.teacherSubject.findFirst({
+    where: { id: subjectId, teacherId: id, schoolId },
+  });
+  if (!existing) {
+    send(res, 404, undefined, 'Subject not found in this teacher\'s pool');
+    return;
+  }
+
+  await prisma.teacherSubject.delete({ where: { id: subjectId } });
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'TEACHER_SUBJECT_REMOVED',
+    targetTable: 'TeacherSubject',
+    targetId: subjectId,
+    meta: { teacherId: id, subjectName: existing.subjectName },
+    ip: req.ip,
+  });
+
+  send(res, 200, { message: 'Subject removed from teacher pool' });
+}
+
+// GET /api/admin/subjects/availability — per-subject-name teacher counts and
+// per-teacher current class-teaching load, grouped for the admin's
+// "Subject Availability" panel.
+export async function getSubjectAvailability(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const pool = await prisma.teacherSubject.findMany({
+    where: { schoolId },
+    include: {
+      teacher: {
+        select: {
+          id: true,
+          name: true,
+          teacherProfile: { select: { wing: true } },
+          teachingSubjects: { where: { isActive: true }, select: { id: true } },
+        },
+      },
+    },
+    orderBy: { subjectName: 'asc' },
+  });
+
+  const bySubject = new Map<
+    string,
+    { subjectName: string; teachers: { id: string; name: string; wing: string | null; currentClassCount: number }[] }
+  >();
+
+  for (const entry of pool) {
+    if (!bySubject.has(entry.subjectName)) {
+      bySubject.set(entry.subjectName, { subjectName: entry.subjectName, teachers: [] });
+    }
+    bySubject.get(entry.subjectName)!.teachers.push({
+      id: entry.teacher.id,
+      name: entry.teacher.name,
+      wing: entry.teacher.teacherProfile?.wing ?? null,
+      currentClassCount: entry.teacher.teachingSubjects.length,
+    });
+  }
+
+  const availability = [...bySubject.values()].map((s) => ({
+    subjectName: s.subjectName,
+    totalTeachers: s.teachers.length,
+    teachers: s.teachers,
+  }));
+
+  send(res, 200, { availability });
+}
+
+// GET /api/admin/subjects/teachers?subjectName=&wing= — pool-matching
+// teachers for a given subject name, optionally filtered by wing. Used by
+// the "Add Section" wizard's Step 2 teacher dropdown (Fix 4).
+export async function getSubjectPoolTeachers(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const subjectName = req.query.subjectName ? String(req.query.subjectName).trim() : '';
+  const wing = req.query.wing ? String(req.query.wing) : undefined;
+  if (!subjectName) {
+    send(res, 400, undefined, 'subjectName is required');
+    return;
+  }
+
+  const pool = await prisma.teacherSubject.findMany({
+    where: {
+      schoolId,
+      subjectName,
+      teacher: {
+        isActive: true,
+        ...(wing ? { teacherProfile: { wing: { in: [wing, 'both'] as ('junior' | 'senior' | 'both')[] } } } : {}),
+      },
+    },
+    include: {
+      teacher: {
+        select: {
+          id: true,
+          name: true,
+          teacherProfile: { select: { wing: true } },
+          teachingSubjects: { where: { isActive: true }, select: { id: true } },
+        },
+      },
+    },
+  });
+
+  const teachers = pool.map((entry) => ({
+    id: entry.teacher.id,
+    name: entry.teacher.name,
+    wing: entry.teacher.teacherProfile?.wing ?? null,
+    currentSubjectCount: entry.teacher.teachingSubjects.length,
+  }));
+
+  send(res, 200, { teachers });
 }
 
 // =================================================================
@@ -2827,6 +3217,7 @@ const adminBrandingSelect = {
   loginBgColor: true,
   loginMessage: true,
   faviconUrl: true,
+  schoolDomain: true,
 } as const;
 
 export async function getSchoolBrandingSelf(req: AuthRequest, res: Response): Promise<void> {
@@ -2851,6 +3242,12 @@ const adminBrandingSchema = z.object({
   loginMessage: z.string().max(300).nullable().optional(),
   logoUrl: z.string().url().nullable().optional(),
   faviconUrl: z.string().url().nullable().optional(),
+  schoolDomain: z
+    .string()
+    .min(2)
+    .max(40)
+    .regex(/^[a-z0-9-]+$/, 'Lowercase letters, numbers and hyphens only')
+    .optional(),
 });
 
 export async function updateSchoolBrandingSelf(req: AuthRequest, res: Response): Promise<void> {
@@ -3219,13 +3616,37 @@ export async function autoGenerateTimetable(req: AuthRequest, res: Response): Pr
     include: { subject: { select: { teacherId: true } }, class: { select: { number: true, section: true } } },
   });
 
+  // Each teacher's current school-wide period load (excluding this class,
+  // since its own slots are about to be regenerated) — a teacher with 0
+  // periods gets priority so the load spreads fairly across staff.
+  const teacherLoadMap = new Map<string, number>();
+  for (const s of otherSlots) {
+    teacherLoadMap.set(s.subject.teacherId, (teacherLoadMap.get(s.subject.teacherId) ?? 0) + 1);
+  }
+
+  const teacherIds = [...new Set(subjects.map((s) => s.teacherId))];
+  const teacherRecords = await prisma.user.findMany({
+    where: { id: { in: teacherIds } },
+    select: { id: true, name: true },
+  });
+  const teacherNameById = new Map(teacherRecords.map((t) => [t.id, t.name]));
+  for (const id of teacherIds) {
+    if (!teacherLoadMap.has(id)) teacherLoadMap.set(id, 0);
+  }
+
+  // Stable-sort the queue so lower-loaded teachers are attempted first —
+  // this is what makes the fairness rule (0-period teachers get priority) hold.
+  const sortedQueue = [...queue].sort(
+    (a, b) => (teacherLoadMap.get(a.teacherId) ?? 0) - (teacherLoadMap.get(b.teacherId) ?? 0)
+  );
+
   const placed: { dayOfWeek: number; startTime: string; endTime: string; subjectId: string; teacherId: string }[] =
     [];
   const skipped: { subject: string; reason: string }[] = [];
   const usedSlotIndices = new Set<number>();
   const usedByDaySubject = new Set<string>(); // `${day}-${subjectId}` — avoid same subject twice same day
 
-  for (const item of queue) {
+  for (const item of sortedQueue) {
     let placedThisItem = false;
 
     for (let i = 0; i < grid.length; i++) {
@@ -3259,6 +3680,7 @@ export async function autoGenerateTimetable(req: AuthRequest, res: Response): Pr
         subjectId: item.subjectId,
         teacherId: item.teacherId,
       });
+      teacherLoadMap.set(item.teacherId, (teacherLoadMap.get(item.teacherId) ?? 0) + 1);
       placedThisItem = true;
       break;
     }
@@ -3293,5 +3715,35 @@ export async function autoGenerateTimetable(req: AuthRequest, res: Response): Pr
     ip: req.ip,
   });
 
-  send(res, 200, { created: placed.length, conflicts: skipped });
+  const DAY_INDEX_TO_NAME = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const subjectNameById = new Map(subjects.map((s) => [s.id, s.name]));
+
+  // Detailed, human-readable schedule report — grouped by day, numbered by
+  // period order within that day, for the "here's what got generated" summary.
+  const schedule = [...placed]
+    .sort((a, b) => a.dayOfWeek - b.dayOfWeek || a.startTime.localeCompare(b.startTime))
+    .map((p) => {
+      const periodIndex = dailyPeriods.findIndex((dp) => dp.startTime === p.startTime) + 1;
+      return {
+        day: DAY_INDEX_TO_NAME[p.dayOfWeek],
+        period: periodIndex,
+        time: `${p.startTime}-${p.endTime}`,
+        subject: subjectNameById.get(p.subjectId) ?? 'Unknown',
+        teacher: teacherNameById.get(p.teacherId) ?? 'Unknown',
+      };
+    });
+
+  const teacherLoad: Record<string, number> = {};
+  for (const [id, load] of teacherLoadMap.entries()) {
+    const name = teacherNameById.get(id);
+    if (name) teacherLoad[name] = load;
+  }
+
+  send(res, 200, {
+    generated: placed.length,
+    skipped: skipped.length,
+    conflicts: skipped,
+    schedule,
+    teacherLoad,
+  });
 }

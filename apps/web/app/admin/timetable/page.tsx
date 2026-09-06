@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import {
   Table,
   TableBody,
@@ -70,8 +71,11 @@ const EMPTY_FORM: SlotForm = { subjectId: '', dayOfWeek: '1', startTime: '', end
 const DAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 interface AutoGenerateResult {
-  created: number;
+  generated: number;
+  skipped: number;
   conflicts: { subject: string; reason: string }[];
+  schedule: { day: string; period: number; time: string; subject: string; teacher: string }[];
+  teacherLoad: Record<string, number>;
 }
 
 export default function TimetablePage() {
@@ -475,7 +479,7 @@ export default function TimetablePage() {
       </Dialog>
 
       <Dialog open={autoGenDialogOpen} onOpenChange={setAutoGenDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
               Auto-Generate Timetable
@@ -489,20 +493,68 @@ export default function TimetablePage() {
           {autoGenResult ? (
             <div className="space-y-3">
               <p className="text-sm text-green-600">
-                ✅ Generated {autoGenResult.created} slot{autoGenResult.created === 1 ? '' : 's'}.
-                {autoGenResult.conflicts.length > 0 && (
-                  <> ⚠️ {autoGenResult.conflicts.length} conflict{autoGenResult.conflicts.length === 1 ? '' : 's'} skipped.</>
+                ✅ Generated {autoGenResult.generated} slot{autoGenResult.generated === 1 ? '' : 's'}.
+                {autoGenResult.skipped > 0 && (
+                  <> ⚠️ {autoGenResult.skipped} subject{autoGenResult.skipped === 1 ? '' : 's'} skipped.</>
                 )}
               </p>
+
               {autoGenResult.conflicts.length > 0 && (
-                <ul className="list-disc space-y-1 pl-4 text-sm text-muted-foreground">
-                  {autoGenResult.conflicts.map((c, i) => (
-                    <li key={i}>
-                      {c.subject}: {c.reason}
-                    </li>
-                  ))}
-                </ul>
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground">Skipped:</p>
+                  <ul className="list-disc space-y-1 pl-4 text-sm text-muted-foreground">
+                    {autoGenResult.conflicts.map((c, i) => (
+                      <li key={i}>
+                        {c.subject}: {c.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
+
+              {autoGenResult.schedule.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground">Generated schedule:</p>
+                  <div className="max-h-52 overflow-y-auto rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="h-8 text-xs">Day</TableHead>
+                          <TableHead className="h-8 text-xs">Period</TableHead>
+                          <TableHead className="h-8 text-xs">Time</TableHead>
+                          <TableHead className="h-8 text-xs">Subject</TableHead>
+                          <TableHead className="h-8 text-xs">Teacher</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {autoGenResult.schedule.map((s, i) => (
+                          <TableRow key={i}>
+                            <TableCell className="py-1 text-xs">{s.day}</TableCell>
+                            <TableCell className="py-1 text-xs">{s.period}</TableCell>
+                            <TableCell className="py-1 text-xs">{s.time}</TableCell>
+                            <TableCell className="py-1 text-xs">{s.subject}</TableCell>
+                            <TableCell className="py-1 text-xs">{s.teacher}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              )}
+
+              {Object.keys(autoGenResult.teacherLoad).length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground">Teacher load (school-wide periods/week):</p>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(autoGenResult.teacherLoad).map(([name, load]) => (
+                      <Badge key={name} variant="outline" className="text-xs">
+                        {name}: {load}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <DialogFooter>
                 <Button onClick={() => setAutoGenDialogOpen(false)}>Close</Button>
               </DialogFooter>

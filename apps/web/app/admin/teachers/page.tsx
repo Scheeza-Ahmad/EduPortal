@@ -42,6 +42,11 @@ interface SubjectOption {
   class?: { number: number; section: string };
 }
 
+interface TeacherSubjectPoolEntry {
+  id: string;
+  subjectName: string;
+}
+
 interface Teacher {
   id: string;
   name: string;
@@ -49,6 +54,7 @@ interface Teacher {
   isActive: boolean;
   role: string;
   teachingSubjects: { id: string; name: string; classId: string }[];
+  subjectPool: TeacherSubjectPoolEntry[];
   teacherProfile: {
     wing: Wing;
     isClassTeacher: boolean;
@@ -56,6 +62,47 @@ interface Teacher {
     coordinatorWing: 'junior' | 'senior' | null;
   } | null;
 }
+
+interface SubjectAvailabilityTeacher {
+  id: string;
+  name: string;
+  wing: Wing | null;
+  currentClassCount: number;
+}
+
+interface SubjectAvailabilityEntry {
+  subjectName: string;
+  totalTeachers: number;
+  teachers: SubjectAvailabilityTeacher[];
+}
+
+const MAX_SUBJECT_POOL_SIZE = 3;
+
+const JUNIOR_SUBJECT_SUGGESTIONS = [
+  'Mathematics',
+  'English',
+  'Urdu',
+  'Islamiat',
+  'General Knowledge',
+  'Science',
+  'Social Studies',
+  'Drawing',
+  'Physical Education',
+];
+
+const SENIOR_SUBJECT_SUGGESTIONS = [
+  'Mathematics',
+  'English',
+  'Urdu',
+  'Physics',
+  'Chemistry',
+  'Biology',
+  'Computer Science',
+  'Islamiat',
+  'Pakistan Studies',
+  'Economics',
+  'Accounting',
+];
 
 interface TeacherForm {
   name: string;
@@ -94,6 +141,29 @@ export default function TeachersPage() {
   const [coordinatorSubmitting, setCoordinatorSubmitting] = useState(false);
   const [removeCoordinatorTarget, setRemoveCoordinatorTarget] = useState<Teacher | null>(null);
 
+  const [poolTarget, setPoolTarget] = useState<Teacher | null>(null);
+  const [poolInput, setPoolInput] = useState('');
+  const [poolError, setPoolError] = useState<string | null>(null);
+  const [poolSubmitting, setPoolSubmitting] = useState(false);
+  const [poolRemovingId, setPoolRemovingId] = useState<string | null>(null);
+
+  const [availability, setAvailability] = useState<SubjectAvailabilityEntry[]>([]);
+  const [availabilityLoading, setAvailabilityLoading] = useState(true);
+
+  async function loadAvailability() {
+    setAvailabilityLoading(true);
+    try {
+      const res = await api.get<{ success: boolean; data: { availability: SubjectAvailabilityEntry[] } }>(
+        '/api/admin/subjects/availability'
+      );
+      setAvailability(res.data.data.availability);
+    } catch {
+      // Non-fatal — the availability panel will just show nothing.
+    } finally {
+      setAvailabilityLoading(false);
+    }
+  }
+
   async function loadSubjects() {
     try {
       const res = await api.get<{ success: boolean; data: { subjects: SubjectOption[] } }>(
@@ -123,7 +193,49 @@ export default function TeachersPage() {
   useEffect(() => {
     loadSubjects();
     loadTeachers();
+    loadAvailability();
   }, []);
+
+  function openPoolDialog(teacher: Teacher) {
+    setPoolTarget(teacher);
+    setPoolInput('');
+    setPoolError(null);
+  }
+
+  async function handleAddPoolSubject(e: FormEvent) {
+    e.preventDefault();
+    if (!poolTarget || !poolInput.trim()) return;
+    setPoolError(null);
+    setPoolSubmitting(true);
+    try {
+      const res = await api.post<{ success: boolean; data: TeacherSubjectPoolEntry }>(
+        `/api/admin/teachers/${poolTarget.id}/subjects`,
+        { subjectName: poolInput.trim() }
+      );
+      setPoolInput('');
+      setPoolTarget((t) => (t ? { ...t, subjectPool: [...t.subjectPool, res.data.data] } : t));
+      await Promise.all([loadTeachers(), loadAvailability()]);
+    } catch (err) {
+      const axiosErr = err as AxiosError<{ error?: string }>;
+      setPoolError(axiosErr.response?.data?.error ?? 'Failed to add subject.');
+    } finally {
+      setPoolSubmitting(false);
+    }
+  }
+
+  async function handleRemovePoolSubject(subjectId: string) {
+    if (!poolTarget) return;
+    setPoolRemovingId(subjectId);
+    try {
+      await api.delete(`/api/admin/teachers/${poolTarget.id}/subjects/${subjectId}`);
+      setPoolTarget((t) => (t ? { ...t, subjectPool: t.subjectPool.filter((s) => s.id !== subjectId) } : t));
+      await Promise.all([loadTeachers(), loadAvailability()]);
+    } catch {
+      setPoolError('Failed to remove subject.');
+    } finally {
+      setPoolRemovingId(null);
+    }
+  }
 
   function openAddDialog() {
     setEditingTeacher(null);
@@ -258,6 +370,7 @@ export default function TeachersPage() {
             <TableHead>Name</TableHead>
             <TableHead>Email</TableHead>
             <TableHead>Subjects</TableHead>
+            <TableHead>Subject Pool</TableHead>
             <TableHead>Status</TableHead>
             <TableHead className="text-right">Actions</TableHead>
           </TableRow>
@@ -265,7 +378,7 @@ export default function TeachersPage() {
         <TableBody>
           {list.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={5} className="text-center text-muted-foreground">
+              <TableCell colSpan={6} className="text-center text-muted-foreground">
                 No teachers in this wing yet.
               </TableCell>
             </TableRow>
@@ -285,6 +398,22 @@ export default function TeachersPage() {
                         </Badge>
                       ))
                     )}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <div className="flex flex-wrap items-center gap-1">
+                    {teacher.subjectPool.length === 0 ? (
+                      <span className="text-xs text-muted-foreground">None</span>
+                    ) : (
+                      teacher.subjectPool.map((s) => (
+                        <Badge key={s.id} variant="secondary" className="text-xs">
+                          {s.subjectName}
+                        </Badge>
+                      ))
+                    )}
+                    <Button variant="outline" size="sm" className="h-6 px-2 text-xs" onClick={() => openPoolDialog(teacher)}>
+                      {teacher.subjectPool.length >= MAX_SUBJECT_POOL_SIZE ? 'Manage' : '+ Add Subject'}
+                    </Button>
                   </div>
                 </TableCell>
                 <TableCell>
@@ -343,6 +472,42 @@ export default function TeachersPage() {
         <h1 className="text-xl font-semibold">Teachers</h1>
         <Button onClick={openAddDialog}>Add Teacher</Button>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Subject Availability</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {availabilityLoading ? (
+            <p className="text-sm text-muted-foreground">Loading availability...</p>
+          ) : availability.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No subjects have been added to any teacher&apos;s pool yet.
+            </p>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {availability.map((entry) => (
+                <div key={entry.subjectName} className="rounded-md border p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="font-medium">{entry.subjectName}</span>
+                    <Badge variant="outline">{entry.totalTeachers} teacher(s)</Badge>
+                  </div>
+                  <div className="space-y-1">
+                    {entry.teachers.map((t) => (
+                      <div key={t.id} className="flex items-center justify-between text-xs text-muted-foreground">
+                        <span>
+                          {t.name} {t.wing ? `(${t.wing})` : ''}
+                        </span>
+                        <span>{t.currentClassCount} class(es)</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading teachers...</p>
@@ -553,6 +718,67 @@ export default function TeachersPage() {
               {coordinatorSubmitting ? 'Removing...' : 'Remove Coordinator'}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(poolTarget)} onOpenChange={(open) => !open && setPoolTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{poolTarget?.name}&apos;s Subject Pool</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-xs text-muted-foreground">
+              Subjects this teacher is eligible to teach. Admin picks from this pool when assigning
+              subjects to a class. Max {MAX_SUBJECT_POOL_SIZE} subjects.
+            </p>
+
+            <div className="flex flex-wrap gap-2">
+              {poolTarget?.subjectPool.length === 0 ? (
+                <span className="text-xs text-muted-foreground">No subjects in pool yet.</span>
+              ) : (
+                poolTarget?.subjectPool.map((s) => (
+                  <Badge key={s.id} variant="secondary" className="flex items-center gap-1 text-xs">
+                    {s.subjectName}
+                    <button
+                      type="button"
+                      className="ml-1 text-muted-foreground hover:text-destructive"
+                      disabled={poolRemovingId === s.id}
+                      onClick={() => handleRemovePoolSubject(s.id)}
+                      aria-label={`Remove ${s.subjectName}`}
+                    >
+                      ×
+                    </button>
+                  </Badge>
+                ))
+              )}
+            </div>
+
+            {poolTarget && poolTarget.subjectPool.length < MAX_SUBJECT_POOL_SIZE && (
+              <form onSubmit={handleAddPoolSubject} className="space-y-2">
+                <Label htmlFor="pool-subject-name">Add Subject</Label>
+                <Input
+                  id="pool-subject-name"
+                  list="subject-suggestions"
+                  placeholder="e.g. Mathematics"
+                  value={poolInput}
+                  onChange={(e) => setPoolInput(e.target.value)}
+                />
+                <datalist id="subject-suggestions">
+                  {[...new Set([...JUNIOR_SUBJECT_SUGGESTIONS, ...SENIOR_SUBJECT_SUGGESTIONS])].map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
+                {poolError && (
+                  <p className="text-sm text-destructive" role="alert">
+                    {poolError}
+                  </p>
+                )}
+                <Button type="submit" size="sm" disabled={!poolInput.trim() || poolSubmitting}>
+                  {poolSubmitting ? 'Adding...' : '+ Add Subject'}
+                </Button>
+              </form>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </div>

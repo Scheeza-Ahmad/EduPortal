@@ -7,6 +7,7 @@ import {
   assignCoordinator,
   autoGenerateTimetable,
   bulkImportStudents,
+  bulkImportStudentsByName,
   checkTimetableConflict,
   createAnnouncement,
   createCalendarDate,
@@ -28,6 +29,7 @@ import {
   deleteTimetableSlot,
   createParent,
   deactivateFinanceUser,
+  addTeacherSubjectPool,
   getAdminLeaveRequests,
   getAnnouncements,
   getAtRiskStudents,
@@ -38,6 +40,9 @@ import {
   getConsentForms,
   getCoordinators,
   getFinanceUsers,
+  getSubjectAvailability,
+  getSubjectPoolTeachers,
+  getTeacherSubjectPool,
   getTimetableSettings,
   globalSearch,
   getParents,
@@ -56,6 +61,7 @@ import {
   reactivateFinanceUser,
   rejectWingReport,
   removeCoordinator,
+  removeTeacherSubjectPool,
   reviewAdminLeaveRequest,
   updateClass,
   updateFinanceUser,
@@ -79,6 +85,7 @@ router.get('/stats/trend', getStatsTrend);
 router.get('/students', getStudents);
 router.post('/students', createStudent);
 router.post('/students/bulk-import', bulkImportStudents);
+router.post('/students/bulk-import-names', bulkImportStudentsByName);
 router.patch('/students/:id', updateStudent);
 router.delete('/students/:id', deleteStudent);
 
@@ -88,6 +95,9 @@ router.post('/teachers', createTeacher);
 router.patch('/teachers/:id', updateTeacher);
 router.delete('/teachers/:id', deleteTeacher);
 router.patch('/teachers/:id/coordinator', requireFeature('featureCoordinator'), assignCoordinator);
+router.get('/teachers/:id/subjects', getTeacherSubjectPool);
+router.post('/teachers/:id/subjects', addTeacherSubjectPool);
+router.delete('/teachers/:id/subjects/:subjectId', removeTeacherSubjectPool);
 
 // Coordinators (dedicated admin page)
 router.get('/coordinators', requireFeature('featureCoordinator'), getCoordinators);
@@ -101,7 +111,10 @@ router.post('/classes/section', createClassWithSubjects);
 router.patch('/classes/:id', updateClass);
 router.delete('/classes/:id', deleteClass);
 
-// Subjects
+// Subjects — /availability and /teachers must be registered before /:id so
+// they aren't swallowed as an id value.
+router.get('/subjects/availability', getSubjectAvailability);
+router.get('/subjects/teachers', getSubjectPoolTeachers);
 router.get('/subjects', getSubjects);
 router.post('/subjects', createSubject);
 router.patch('/subjects/:id', updateSubject);

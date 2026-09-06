@@ -34,6 +34,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { ErrorState } from '@/components/shared/ErrorState';
+import { useFeatures } from '@/lib/FeaturesContext';
 
 type Wing = 'junior' | 'senior' | 'both';
 
@@ -53,6 +54,13 @@ interface TeacherOption {
   name: string;
   teacherProfile: { wing: Wing } | null;
   teachingSubjects: { id: string }[];
+}
+
+interface PoolTeacher {
+  id: string;
+  name: string;
+  wing: Wing | null;
+  currentSubjectCount: number;
 }
 
 const MAX_SUBJECTS_PER_TEACHER = 3;
@@ -113,6 +121,7 @@ interface StudentForm {
   address: string;
   parentName: string;
   parentEmail: string;
+  parentPassword: string;
 }
 
 const EMPTY_STUDENT_FORM: StudentForm = {
@@ -126,7 +135,14 @@ const EMPTY_STUDENT_FORM: StudentForm = {
   address: '',
   parentName: '',
   parentEmail: '',
+  parentPassword: '',
 };
+
+/** Random 4-digit suffix used when there's no roll number yet to derive a
+ * password from (e.g. the name/roll fields haven't been filled in). */
+function randomDigits(n: number): string {
+  return String(Math.floor(Math.random() * 10 ** n)).padStart(n, '0');
+}
 
 const JUNIOR_NUMBERS = [1, 2, 3, 4, 5];
 const SENIOR_NUMBERS = [6, 7, 8, 9, 10];
@@ -139,6 +155,38 @@ function classLabel(c: { number: number; section: string }): string {
 function getErrorMessage(err: unknown, fallback: string): string {
   const axiosErr = err as AxiosError<{ error?: string }>;
   return axiosErr.response?.data?.error ?? fallback;
+}
+
+/** Mirrors the backend's splitNameForEmail — used to build the client-side
+ * preview before the actual import call. */
+function splitNameForEmail(name: string): { first: string; slug: string } {
+  const clean = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, '')
+    .split(/\s+/)
+    .filter(Boolean);
+  const first = clean[0] ?? 'student';
+  const last = clean.length > 1 ? clean[clean.length - 1] : '';
+  return { first, slug: last ? `${first}.${last}` : first };
+}
+
+function trailingRollNumber(rollNo: string): number {
+  const match = rollNo.match(/(\d+)$/);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+function padRollNo(n: number): string {
+  return String(n).padStart(3, '0');
+}
+
+interface BulkPreviewRow {
+  name: string;
+  email: string;
+  password: string;
+  rollNo: string;
+  parentEmail?: string;
+  parentPassword?: string;
 }
 
 /** Capacity bar + FULL/Almost Full badge for one section card. */
@@ -197,6 +245,28 @@ export default function StudentsClassesPage() {
   const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1);
   const [subjectRows, setSubjectRows] = useState<SubjectRow[]>([]);
 
+  // Fix 4 — subject-pool-matching teachers for the Step 2 dropdown, keyed by
+  // the exact subject name typed into that row. Fetched lazily as each name
+  // stabilizes (on blur) rather than on every keystroke.
+  const [poolTeachersBySubject, setPoolTeachersBySubject] = useState<Record<string, PoolTeacher[]>>({});
+  const [poolLoadingSubject, setPoolLoadingSubject] = useState<string | null>(null);
+
+  async function fetchPoolTeachersForSubject(subjectName: string) {
+    const key = subjectName.trim();
+    if (!key || poolTeachersBySubject[key]) return;
+    setPoolLoadingSubject(key);
+    try {
+      const res = await api.get<{ success: boolean; data: { teachers: PoolTeacher[] } }>(
+        `/api/admin/subjects/teachers?subjectName=${encodeURIComponent(key)}&wing=${activeWing}`
+      );
+      setPoolTeachersBySubject((prev) => ({ ...prev, [key]: res.data.data.teachers }));
+    } catch {
+      // Non-fatal — the dropdown falls back to showing every wing teacher.
+    } finally {
+      setPoolLoadingSubject(null);
+    }
+  }
+
   // Inline student roster per expanded section
   const [expandedSectionId, setExpandedSectionId] = useState<string | null>(null);
   const [studentsBySection, setStudentsBySection] = useState<Record<string, Student[]>>({});
@@ -212,15 +282,32 @@ export default function StudentsClassesPage() {
   const [togglingStudentId, setTogglingStudentId] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  // Bulk import
+  // Fix 6 — which auto-generated fields the admin has manually overridden;
+  // an untouched field keeps re-deriving itself as name/roll no change.
+  const [studentAutoTouched, setStudentAutoTouched] = useState({
+    email: false,
+    password: false,
+    parentEmail: false,
+    parentPassword: false,
+  });
+
+  // Bulk import — redesigned per Fix 5: a newline-separated name list per
+  // section, previewed (auto roll numbers + emails + passwords) before import.
   const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
-  const [csvText, setCsvText] = useState('');
+  const [bulkClassId, setBulkClassId] = useState('');
+  const [bulkNamesText, setBulkNamesText] = useState('');
+  const [bulkCreateParents, setBulkCreateParents] = useState(false);
+  const [bulkPreview, setBulkPreview] = useState<BulkPreviewRow[] | null>(null);
+  const [bulkPreviewing, setBulkPreviewing] = useState(false);
   const [bulkSubmitting, setBulkSubmitting] = useState(false);
   const [bulkResult, setBulkResult] = useState<{
-    createdCount: number;
-    errors: { row: number; email: string; error: string }[];
+    created: { name: string; email: string; password: string; rollNo: string }[];
+    parents: { name: string; email: string; password: string; forStudent: string }[];
+    failed: { name: string; error: string }[];
   } | null>(null);
   const [bulkError, setBulkError] = useState<string | null>(null);
+  const [schoolDomain, setSchoolDomain] = useState('school');
+  const { hasFeature } = useFeatures();
 
   async function loadClasses() {
     setLoading(true);
@@ -251,6 +338,10 @@ export default function StudentsClassesPage() {
   useEffect(() => {
     loadClasses();
     loadTeachers();
+    api
+      .get<{ success: boolean; data: { schoolDomain?: string } }>('/api/admin/school-settings/branding')
+      .then((res) => setSchoolDomain(res.data.data.schoolDomain || 'school'))
+      .catch(() => {});
   }, []);
 
   async function loadStudentsForSection(classId: string) {
@@ -291,6 +382,17 @@ export default function StudentsClassesPage() {
     return teachers.filter((t) => t.teacherProfile?.wing === wing || t.teacherProfile?.wing === 'both');
   }
 
+  /** Wizard Step 2's teacher dropdown for a given row — only teachers whose
+   * subject pool contains that exact subject name, once the pool lookup for
+   * that name has resolved. Falls back to every wing teacher until then. */
+  function teachersForSubjectRow(subjectName: string): TeacherOption[] {
+    const key = subjectName.trim();
+    const pool = poolTeachersBySubject[key];
+    if (!pool) return teachersForWing(activeWing);
+    const poolIds = new Set(pool.map((p) => p.id));
+    return teachersForWing(activeWing).filter((t) => poolIds.has(t.id));
+  }
+
   /** A teacher's subject count as it would be *after* this wizard session
    * saves — their existing count plus how many rows in the current draft
    * already have them assigned (excluding the row being edited, so picking
@@ -315,7 +417,9 @@ export default function StudentsClassesPage() {
     setSectionForm({ number: String(number), section: 'A', classTeacherId: '', maxStudents: '30' });
     setSectionFormError(null);
     setWizardStep(1);
-    setSubjectRows(emptySubjectRows(activeWing));
+    const rows = emptySubjectRows(activeWing);
+    setSubjectRows(rows);
+    rows.forEach((r) => fetchPoolTeachersForSubject(r.name));
     setSectionDialogOpen(true);
   }
 
@@ -396,7 +500,39 @@ export default function StudentsClassesPage() {
     setStudentForm({ ...EMPTY_STUDENT_FORM, classId });
     setStudentFormError(null);
     setSuccessMsg(null);
+    setStudentAutoTouched({ email: false, password: false, parentEmail: false, parentPassword: false });
     setStudentDialogOpen(true);
+  }
+
+  /** Fix 6 — auto-fills email/password (and parent equivalents) from the
+   * student's name as it's typed, without clobbering anything the admin has
+   * already edited by hand. */
+  useEffect(() => {
+    if (editingStudent || !studentDialogOpen) return;
+    const { first, slug } = splitNameForEmail(studentForm.name);
+    if (!studentForm.name.trim()) return;
+
+    setStudentForm((f) => {
+      const next = { ...f };
+      if (!studentAutoTouched.email) {
+        next.email = `${slug}@${schoolDomain}.edu`;
+      }
+      if (!studentAutoTouched.password) {
+        next.password = f.rollNo ? `Student@${f.rollNo}` : `Stu@${randomDigits(4)}`;
+      }
+      if (!studentAutoTouched.parentEmail) {
+        next.parentEmail = `parent.${first}@${schoolDomain}.edu`;
+      }
+      if (!studentAutoTouched.parentPassword) {
+        next.parentPassword = f.rollNo ? `Parent@${f.rollNo}` : `Parent@${randomDigits(4)}`;
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [studentForm.name, studentForm.rollNo, editingStudent, studentDialogOpen, schoolDomain]);
+
+  function copyToClipboard(text: string) {
+    navigator.clipboard?.writeText(text).catch(() => {});
   }
 
   function openEditStudentDialog(student: Student) {
@@ -412,6 +548,7 @@ export default function StudentsClassesPage() {
       address: student.studentProfile?.address ?? '',
       parentName: '',
       parentEmail: '',
+      parentPassword: '',
     });
     setStudentFormError(null);
     setStudentDialogOpen(true);
@@ -455,6 +592,7 @@ export default function StudentsClassesPage() {
           address: studentForm.address || undefined,
           parentName: studentForm.parentName || undefined,
           parentEmail: studentForm.parentEmail || undefined,
+          parentPassword: studentForm.parentEmail ? studentForm.parentPassword || undefined : undefined,
         });
         if (res.data.data.parentAutoCreated) {
           setSuccessMsg(
@@ -487,13 +625,65 @@ export default function StudentsClassesPage() {
     }
   }
 
-  // ---- Bulk import ----
+  // ---- Bulk import (Fix 5 — name list, not CSV) ----
 
-  function openBulkDialog() {
-    setCsvText('');
+  function openBulkDialog(classId?: string) {
+    setBulkClassId(classId ?? '');
+    setBulkNamesText('');
+    setBulkCreateParents(false);
+    setBulkPreview(null);
     setBulkResult(null);
     setBulkError(null);
     setBulkDialogOpen(true);
+  }
+
+  function parseBulkNames(): string[] {
+    return bulkNamesText
+      .split(/\r?\n/)
+      .map((n) => n.trim())
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b));
+  }
+
+  async function handleBulkPreview() {
+    setBulkError(null);
+    if (!bulkClassId) {
+      setBulkError('Select a section first.');
+      return;
+    }
+    const names = parseBulkNames();
+    if (names.length === 0) {
+      setBulkError('Enter at least one name.');
+      return;
+    }
+
+    setBulkPreviewing(true);
+    try {
+      if (!studentsBySection[bulkClassId]) {
+        await loadStudentsForSection(bulkClassId);
+      }
+      const existingRollNos = (studentsBySection[bulkClassId] ?? [])
+        .map((s) => s.studentProfile?.rollNo)
+        .filter((r): r is string => Boolean(r));
+      let nextRollNo = Math.max(0, ...existingRollNos.map(trailingRollNumber)) + 1;
+
+      const preview: BulkPreviewRow[] = names.map((name) => {
+        const rollNo = padRollNo(nextRollNo);
+        const { first, slug } = splitNameForEmail(name);
+        nextRollNo += 1;
+        return {
+          name,
+          email: `${slug}@${schoolDomain}.edu`,
+          password: `Student@${rollNo}`,
+          rollNo,
+          parentEmail: bulkCreateParents ? `parent.${first}@${schoolDomain}.edu` : undefined,
+          parentPassword: bulkCreateParents ? `Parent@${rollNo}` : undefined,
+        };
+      });
+      setBulkPreview(preview);
+    } finally {
+      setBulkPreviewing(false);
+    }
   }
 
   async function handleBulkImport(e: FormEvent) {
@@ -504,13 +694,23 @@ export default function StudentsClassesPage() {
     try {
       const res = await api.post<{
         success: boolean;
-        data: { createdCount: number; errors: { row: number; email: string; error: string }[] };
-      }>('/api/admin/students/bulk-import', { csv: csvText });
+        data: {
+          created: { name: string; email: string; password: string; rollNo: string }[];
+          parents: { name: string; email: string; password: string; forStudent: string }[];
+          failed: { name: string; error: string }[];
+        };
+      }>('/api/admin/students/bulk-import-names', {
+        classId: bulkClassId,
+        names: parseBulkNames(),
+        schoolDomain,
+        createParents: bulkCreateParents,
+      });
       setBulkResult(res.data.data);
+      setBulkPreview(null);
       await loadClasses();
       if (expandedSectionId) await loadStudentsForSection(expandedSectionId);
     } catch (err) {
-      setBulkError(getErrorMessage(err, 'Failed to import CSV.'));
+      setBulkError(getErrorMessage(err, 'Failed to import students.'));
     } finally {
       setBulkSubmitting(false);
     }
@@ -664,7 +864,7 @@ export default function StudentsClassesPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Students & Classes</h1>
-        <Button variant="outline" onClick={openBulkDialog}>
+        <Button variant="outline" onClick={() => openBulkDialog()}>
           Bulk Import Students
         </Button>
       </div>
@@ -902,6 +1102,9 @@ export default function StudentsClassesPage() {
                   {subjectRows.map((row, i) => {
                     const rowTeacherCount = row.teacherId ? subjectCountFor(row.teacherId, i) : 0;
                     const rowTeacherAtCap = rowTeacherCount >= MAX_SUBJECTS_PER_TEACHER;
+                    const eligibleTeachers = teachersForSubjectRow(row.name);
+                    const poolResolved = Boolean(poolTeachersBySubject[row.name.trim()]);
+                    const noTeacherAvailable = row.name.trim().length > 0 && poolResolved && eligibleTeachers.length === 0;
                     return (
                     <div key={i} className="space-y-1">
                     <div className="flex items-center gap-2">
@@ -909,6 +1112,7 @@ export default function StudentsClassesPage() {
                         placeholder="Subject Name"
                         value={row.name}
                         onChange={(e) => updateSubjectRow(i, { name: e.target.value })}
+                        onBlur={(e) => fetchPoolTeachersForSubject(e.target.value)}
                         className="flex-1"
                       />
                       <Select
@@ -920,7 +1124,7 @@ export default function StudentsClassesPage() {
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="none">Select teacher</SelectItem>
-                          {teachersForWing(activeWing).map((t) => {
+                          {eligibleTeachers.map((t) => {
                             const count = subjectCountFor(t.id, i);
                             return (
                               <SelectItem key={t.id} value={t.id} disabled={count >= MAX_SUBJECTS_PER_TEACHER}>
@@ -948,6 +1152,14 @@ export default function StudentsClassesPage() {
                         Remove
                       </Button>
                     </div>
+                    {poolLoadingSubject === row.name.trim() && (
+                      <p className="text-xs text-muted-foreground">Checking teacher availability...</p>
+                    )}
+                    {noTeacherAvailable && (
+                      <p className="text-xs text-destructive">
+                        No teacher available for this subject. Add subject to a teacher&apos;s pool first.
+                      </p>
+                    )}
                     {rowTeacherAtCap && (
                       <p className="text-xs text-destructive">
                         ⚠️ {teacherName(row.teacherId)} already has {MAX_SUBJECTS_PER_TEACHER} subjects
@@ -1049,28 +1261,43 @@ export default function StudentsClassesPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="student-email">Email</Label>
+                <Label htmlFor="student-email">Email {!editingStudent && '(auto-generated, editable)'}</Label>
                 <Input
                   id="student-email"
                   type="email"
                   required
                   value={studentForm.email}
-                  onChange={(e) => setStudentForm((f) => ({ ...f, email: e.target.value }))}
+                  onChange={(e) => {
+                    setStudentForm((f) => ({ ...f, email: e.target.value }));
+                    setStudentAutoTouched((t) => ({ ...t, email: true }));
+                  }}
                 />
               </div>
             </div>
 
             {!editingStudent && (
               <div className="space-y-2">
-                <Label htmlFor="student-password">Password</Label>
-                <Input
-                  id="student-password"
-                  type="password"
-                  required
-                  minLength={8}
-                  value={studentForm.password}
-                  onChange={(e) => setStudentForm((f) => ({ ...f, password: e.target.value }))}
-                />
+                <Label htmlFor="student-password">Password (auto-generated, editable)</Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="student-password"
+                    required
+                    minLength={8}
+                    value={studentForm.password}
+                    onChange={(e) => {
+                      setStudentForm((f) => ({ ...f, password: e.target.value }));
+                      setStudentAutoTouched((t) => ({ ...t, password: true }));
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => copyToClipboard(studentForm.password)}
+                  >
+                    Copy
+                  </Button>
+                </div>
               </div>
             )}
 
@@ -1148,19 +1375,48 @@ export default function StudentsClassesPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="parent-email">Parent Email</Label>
+                    <Label htmlFor="parent-email">Parent Email (auto-generated, editable)</Label>
                     <Input
                       id="parent-email"
                       type="email"
                       value={studentForm.parentEmail}
-                      onChange={(e) => setStudentForm((f) => ({ ...f, parentEmail: e.target.value }))}
+                      onChange={(e) => {
+                        setStudentForm((f) => ({ ...f, parentEmail: e.target.value }));
+                        setStudentAutoTouched((t) => ({ ...t, parentEmail: true }));
+                      }}
                     />
                   </div>
                 </div>
+                {studentForm.parentEmail && (
+                  <div className="space-y-2">
+                    <Label htmlFor="parent-password">Parent Password (auto-generated, editable)</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        id="parent-password"
+                        value={studentForm.parentPassword}
+                        onChange={(e) => {
+                          setStudentForm((f) => ({ ...f, parentPassword: e.target.value }));
+                          setStudentAutoTouched((t) => ({ ...t, parentPassword: true }));
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => copyToClipboard(studentForm.parentPassword)}
+                      >
+                        Copy
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Only used if this email doesn&apos;t already belong to an existing parent account.
+                    </p>
+                  </div>
+                )}
                 <p className="text-xs text-muted-foreground">
                   If this email already belongs to a parent at this school, the student is linked to
                   that account (siblings share one login). Otherwise a new parent account is
-                  auto-created and emailed their credentials.
+                  auto-created with the password above and emailed their credentials.
                 </p>
               </div>
             )}
@@ -1180,33 +1436,56 @@ export default function StudentsClassesPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Bulk Import */}
+      {/* Bulk Import — Fix 5: newline-separated name list, previewed first */}
       <Dialog open={bulkDialogOpen} onOpenChange={setBulkDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Bulk Import Students</DialogTitle>
           </DialogHeader>
 
           <form onSubmit={handleBulkImport} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="csv-text">
-                CSV text (header row required: name,email,password,classId,rollNo,dob,phone,address)
-              </Label>
+              <Label>Section</Label>
+              <Select value={bulkClassId} onValueChange={(v) => { setBulkClassId(v); setBulkPreview(null); }}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a section" />
+                </SelectTrigger>
+                <SelectContent>
+                  {classes.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {classLabel(c)} ({c._count.studentProfiles}/{c.maxStudents})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="bulk-names">Student names (one per line)</Label>
               <Textarea
-                id="csv-text"
-                required
+                id="bulk-names"
                 rows={8}
-                className="font-mono text-xs"
-                placeholder={
-                  'name,email,password,classId,rollNo\nAli Khan,ali@example.com,password123,clx123,101'
-                }
-                value={csvText}
-                onChange={(e) => setCsvText(e.target.value)}
+                placeholder={'Ahmed Khan\nFatima Ali\nZainab Malik'}
+                value={bulkNamesText}
+                onChange={(e) => { setBulkNamesText(e.target.value); setBulkPreview(null); }}
               />
               <p className="text-xs text-muted-foreground">
-                classId must match an existing section id shown above.
+                Names are sorted alphabetically and given roll numbers continuing from the last one
+                already used in this section. Email is {'{firstname.lastname}'}@{schoolDomain}.edu and
+                password is Student@{'{rollNo}'} — both editable after import.
               </p>
             </div>
+
+            {hasFeature('featureParentPortal') && (
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={bulkCreateParents}
+                  onChange={(e) => { setBulkCreateParents(e.target.checked); setBulkPreview(null); }}
+                />
+                Also create a parent account for each student
+              </label>
+            )}
 
             {bulkError && (
               <p className="text-sm text-destructive" role="alert">
@@ -1214,20 +1493,62 @@ export default function StudentsClassesPage() {
               </p>
             )}
 
+            {!bulkResult && (
+              <Button type="button" variant="outline" onClick={handleBulkPreview} disabled={bulkPreviewing}>
+                {bulkPreviewing ? 'Loading...' : 'Preview'}
+              </Button>
+            )}
+
+            {bulkPreview && !bulkResult && (
+              <div className="max-h-64 overflow-y-auto rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="h-8 text-xs">Roll No</TableHead>
+                      <TableHead className="h-8 text-xs">Name</TableHead>
+                      <TableHead className="h-8 text-xs">Email</TableHead>
+                      <TableHead className="h-8 text-xs">Password</TableHead>
+                      {bulkCreateParents && <TableHead className="h-8 text-xs">Parent</TableHead>}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {bulkPreview.map((row) => (
+                      <TableRow key={row.rollNo}>
+                        <TableCell className="py-1 text-xs">{row.rollNo}</TableCell>
+                        <TableCell className="py-1 text-xs">{row.name}</TableCell>
+                        <TableCell className="py-1 text-xs">{row.email}</TableCell>
+                        <TableCell className="py-1 text-xs">{row.password}</TableCell>
+                        {bulkCreateParents && (
+                          <TableCell className="py-1 text-xs">
+                            {row.parentEmail} / {row.parentPassword}
+                          </TableCell>
+                        )}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+
             {bulkResult && (
               <div className="rounded-md border p-3 text-sm">
                 <p className="font-medium text-green-600">
-                  {bulkResult.createdCount} student(s) created successfully.
+                  {bulkResult.created.length} student(s) created successfully.
                 </p>
-                {bulkResult.errors.length > 0 && (
+                {bulkResult.parents.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {bulkResult.parents.length} parent account(s) created.
+                  </p>
+                )}
+                {bulkResult.failed.length > 0 && (
                   <div className="mt-2 space-y-1">
                     <p className="font-medium text-destructive">
-                      {bulkResult.errors.length} row(s) failed:
+                      {bulkResult.failed.length} name(s) failed:
                     </p>
                     <ul className="list-disc pl-4 text-xs text-muted-foreground">
-                      {bulkResult.errors.map((e, i) => (
+                      {bulkResult.failed.map((e, i) => (
                         <li key={i}>
-                          Row {e.row} ({e.email || 'no email'}): {e.error}
+                          {e.name}: {e.error}
                         </li>
                       ))}
                     </ul>
@@ -1237,9 +1558,15 @@ export default function StudentsClassesPage() {
             )}
 
             <DialogFooter>
-              <Button type="submit" disabled={bulkSubmitting}>
-                {bulkSubmitting ? 'Importing...' : 'Import'}
-              </Button>
+              {bulkResult ? (
+                <Button type="button" onClick={() => setBulkDialogOpen(false)}>
+                  Close
+                </Button>
+              ) : (
+                <Button type="submit" disabled={bulkSubmitting || !bulkPreview}>
+                  {bulkSubmitting ? 'Importing...' : `Import ${bulkPreview?.length ?? ''} Student(s)`}
+                </Button>
+              )}
             </DialogFooter>
           </form>
         </DialogContent>

@@ -95,14 +95,15 @@ model User {
   auditLogs     AuditLog[]
   notifications Notification[]
 
-  teachingSubjects Subject[]      @relation("SubjectTeacher")
-  classTeacherOf   Class[]        @relation("ClassTeacher")
-  activities       Activity[]     @relation("ActivityCreatedBy")
-  submissions      Submission[]   @relation("SubmissionStudent")
-  attendanceMarks  Attendance[]   @relation("AttendanceStudent")
-  announcements    Announcement[] @relation("AnnouncementAuthor")
-  leaveRequests    LeaveRequest[] @relation("LeaveRequester")
-  teacherLeaves    TeacherLeave[] @relation("TeacherLeaveRequester")
+  teachingSubjects Subject[]        @relation("SubjectTeacher")
+  classTeacherOf   Class[]          @relation("ClassTeacher")
+  activities       Activity[]       @relation("ActivityCreatedBy")
+  submissions      Submission[]     @relation("SubmissionStudent")
+  attendanceMarks  Attendance[]     @relation("AttendanceStudent")
+  announcements    Announcement[]   @relation("AnnouncementAuthor")
+  leaveRequests    LeaveRequest[]   @relation("LeaveRequester")
+  teacherLeaves    TeacherLeave[]   @relation("TeacherLeaveRequester")
+  subjectPool      TeacherSubject[] @relation("TeacherSubjectPool")
 
   studentFees  StudentFee[] @relation("StudentFees")
   recordedFees FeePayment[] @relation("FeePayments")
@@ -238,6 +239,23 @@ model Subject {
 
   @@index([classId])
   @@index([teacherId])
+}
+
+// A teacher's pool of subjects they are eligible to teach (distinct from
+// Subject, which is an actual class+subject+teacher assignment). Admin picks
+// from this pool when assigning subjects to a class.
+model TeacherSubject {
+  id          String   @id @default(cuid())
+  teacherId   String
+  schoolId    String
+  subjectName String
+  createdAt   DateTime @default(now())
+
+  teacher User @relation("TeacherSubjectPool", fields: [teacherId], references: [id])
+
+  @@unique([teacherId, subjectName])
+  @@index([teacherId])
+  @@index([schoolId])
 }
 
 // ---------------------------------------------------------------
@@ -558,6 +576,9 @@ model SchoolSettings {
   loginBgColor String  @default("#ffffff")
   loginMessage String?
   faviconUrl   String?
+
+  // Used to auto-generate student/parent emails, e.g. "citygrammar" -> firstname.lastname@citygrammar.edu
+  schoolDomain String @default("school")
 
   school School @relation(fields: [schoolId], references: [id])
 }

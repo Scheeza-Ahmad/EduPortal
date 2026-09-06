@@ -10,6 +10,10 @@ import { BrandingEditor, BrandingFormData, EMPTY_BRANDING_FORM } from '@/compone
 import { FeaturesEditor } from '@/components/features/FeaturesEditor';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { TimetableSettingsTab } from '@/components/school-settings/TimetableSettingsTab';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Button } from '@/components/ui/button';
 
 function getErrorMessage(err: unknown, fallback: string): string {
   const axiosErr = err as AxiosError<{ error?: string }>;
@@ -24,6 +28,12 @@ export default function SchoolSettingsPage() {
 
   const [features, setFeaturesState] = useState<Record<string, boolean>>({});
   const [featuresLoading, setFeaturesLoading] = useState(true);
+
+  // Fix 6 — school domain used to auto-generate student/parent emails
+  // (firstname.lastname@{domain}.edu).
+  const [schoolDomain, setSchoolDomain] = useState('');
+  const [domainSaving, setDomainSaving] = useState(false);
+  const [domainError, setDomainError] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -40,9 +50,11 @@ export default function SchoolSettingsPage() {
           sidebarColor: string | null;
           loginBgColor: string;
           fontFamily: string;
+          schoolDomain: string;
         }>;
       }>('/api/admin/school-settings/branding');
       const b = res.data.data;
+      setSchoolDomain(b.schoolDomain || 'school');
       setInitial({
         portalName: b.portalName || EMPTY_BRANDING_FORM.portalName,
         loginMessage: b.loginMessage ?? '',
@@ -119,6 +131,19 @@ export default function SchoolSettingsPage() {
     toast.success('Branding updated!');
   }
 
+  async function handleSaveDomain() {
+    setDomainError(null);
+    setDomainSaving(true);
+    try {
+      await api.patch('/api/admin/school-settings/branding', { schoolDomain });
+      toast.success('School domain updated!');
+    } catch (err) {
+      setDomainError(getErrorMessage(err, 'Failed to update school domain.'));
+    } finally {
+      setDomainSaving(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <h1 className="text-xl font-semibold">School Settings & Branding</h1>
@@ -135,7 +160,33 @@ export default function SchoolSettingsPage() {
             <TabsTrigger value="timetable">Timetable Settings</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="branding" className="pt-4">
+          <TabsContent value="branding" className="space-y-4 pt-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">School Domain</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <Label htmlFor="school-domain">Used to auto-generate student/parent emails</Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="school-domain"
+                    value={schoolDomain}
+                    onChange={(e) => setSchoolDomain(e.target.value.toLowerCase())}
+                    placeholder="citygrammar"
+                    className="max-w-xs"
+                  />
+                  <span className="text-sm text-muted-foreground">.edu</span>
+                  <Button size="sm" disabled={domainSaving} onClick={handleSaveDomain}>
+                    {domainSaving ? 'Saving...' : 'Save'}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  e.g. &quot;citygrammar&quot; generates ahmed.khan@citygrammar.edu
+                </p>
+                {domainError && <p className="text-sm text-destructive">{domainError}</p>}
+              </CardContent>
+            </Card>
+
             <BrandingEditor title="Customize Your Portal" initial={initial} onSave={handleSave} />
           </TabsContent>
 
