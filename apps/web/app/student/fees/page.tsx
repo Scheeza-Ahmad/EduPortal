@@ -1,9 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { pdf } from '@react-pdf/renderer';
 import { api } from '@/lib/api';
-import { ChallanPdfDocument } from '@/lib/challanPdf';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -73,6 +71,12 @@ export default function StudentFeesPage() {
     if (!student) return;
     setDownloadingId(fee.id);
     try {
+      // Loaded on demand — @react-pdf/renderer is a heavy PDF-layout engine
+      // that has no reason to be in this page's initial bundle.
+      const [{ pdf }, { ChallanPdfDocument }] = await Promise.all([
+        import('@react-pdf/renderer'),
+        import('@/lib/challanPdf'),
+      ]);
       const blob = await pdf(
         <ChallanPdfDocument
           schoolName={schoolName}

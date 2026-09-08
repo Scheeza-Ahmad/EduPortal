@@ -1,9 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { pdf } from '@react-pdf/renderer';
 import { api } from '@/lib/api';
-import { ReportCardPdfDocument, ReportCardData } from '@/lib/reportCardPdf';
+import type { ReportCardData } from '@/lib/reportCardPdf';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -39,6 +38,12 @@ interface StudentOption {
 }
 
 async function downloadReportCard(report: ReportCardData) {
+  // Loaded on demand — @react-pdf/renderer is a heavy PDF-layout engine
+  // that has no reason to be in this page's initial bundle.
+  const [{ pdf }, { ReportCardPdfDocument }] = await Promise.all([
+    import('@react-pdf/renderer'),
+    import('@/lib/reportCardPdf'),
+  ]);
   const blob = await pdf(<ReportCardPdfDocument {...report} />).toBlob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

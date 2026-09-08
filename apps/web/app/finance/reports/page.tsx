@@ -2,9 +2,8 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { AxiosError } from 'axios';
-import { pdf } from '@react-pdf/renderer';
 import { api } from '@/lib/api';
-import { FinanceReportPdfDocument, ReportClassGroup } from '@/lib/financeReportPdf';
+import type { ReportClassGroup } from '@/lib/financeReportPdf';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -133,6 +132,12 @@ export default function FinanceReportsPage() {
   async function handleDownloadPdf(report: FinanceReport) {
     setDownloadingId(report.id);
     try {
+      // Loaded on demand — @react-pdf/renderer is a heavy PDF-layout engine
+      // that has no reason to be in this page's initial bundle.
+      const [{ pdf }, { FinanceReportPdfDocument }] = await Promise.all([
+        import('@react-pdf/renderer'),
+        import('@/lib/financeReportPdf'),
+      ]);
       const blob = await pdf(
         <FinanceReportPdfDocument
           schoolName={schoolName || 'EduPortal School'}

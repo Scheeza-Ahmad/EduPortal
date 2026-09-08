@@ -72,7 +72,18 @@ api.interceptors.response.use(
       return api(originalRequest);
     }
 
-    if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
+    // A 401 from the auth endpoints themselves (wrong credentials on login,
+    // no/expired refresh cookie on /refresh, etc.) is not "my session
+    // expired mid-request" — it's the auth flow's own answer. Running the
+    // refresh-then-hard-redirect logic on it would force a full
+    // window.location.href reload of /login, which remounts the page and
+    // resets its step state back to the role-select screen, masking the
+    // "Incorrect email or password" message the login page is trying to show.
+    const isAuthEndpoint = /\/api\/auth\/(login|refresh|forgot-password|reset-password)/.test(
+      originalRequest?.url ?? ''
+    );
+
+    if (error.response?.status === 401 && originalRequest && !originalRequest._retry && !isAuthEndpoint) {
       originalRequest._retry = true;
 
       const newToken = await refreshAccessToken();

@@ -2,9 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { AxiosError } from 'axios';
-import { pdf } from '@react-pdf/renderer';
 import { api } from '@/lib/api';
-import { ReceiptPdfDocument } from '@/lib/receiptPdf';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -117,6 +115,12 @@ export default function StudentFeesPage() {
     if (!receipt) return;
     setDownloadingReceipt(true);
     try {
+      // Loaded on demand — @react-pdf/renderer is a heavy PDF-layout engine
+      // that has no reason to be in this page's initial bundle.
+      const [{ pdf }, { ReceiptPdfDocument }] = await Promise.all([
+        import('@react-pdf/renderer'),
+        import('@/lib/receiptPdf'),
+      ]);
       const blob = await pdf(<ReceiptPdfDocument {...receipt} />).toBlob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
