@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import useSWR from 'swr';
 import Link from 'next/link';
 import { Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
-import { api } from '@/lib/api';
+import { fetcher } from '@/lib/api';
 import { CHART_COLORS } from '@/lib/chartColors';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -72,50 +72,21 @@ interface SubjectCard {
 }
 
 export default function StudentDashboardPage() {
-  const [data, setData] = useState<Dashboard | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [subjects, setSubjects] = useState<SubjectCard[]>([]);
-  const [attendanceCounts, setAttendanceCounts] = useState<AttendanceStatusCounts | null>(null);
-  const [retryKey, setRetryKey] = useState(0);
+  // Fix 3 — SWR instead of useEffect+useState: cached, deduped, and kept
+  // fresh with a background refresh instead of a full reload each visit.
+  const { data, error, isLoading, mutate } = useSWR<Dashboard>('/api/student/dashboard', fetcher, {
+    refreshInterval: 120000,
+  });
+  const { data: subjectsData } = useSWR<{ subjects: SubjectCard[] }>('/api/student/subjects', fetcher);
+  const { data: attendanceData } = useSWR<{ statusCounts: AttendanceStatusCounts }>(
+    '/api/student/attendance',
+    fetcher
+  );
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
+  const subjects = subjectsData?.subjects ?? [];
+  const attendanceCounts = attendanceData?.statusCounts ?? null;
 
-    api
-      .get<{ success: boolean; data: Dashboard }>('/api/student/dashboard')
-      .then((res) => {
-        if (!cancelled) setData(res.data.data);
-      })
-      .catch(() => {
-        if (!cancelled) setError('Failed to load dashboard.');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    api
-      .get<{ success: boolean; data: { subjects: SubjectCard[] } }>('/api/student/subjects')
-      .then((res) => {
-        if (!cancelled) setSubjects(res.data.data.subjects);
-      })
-      .catch(() => {});
-
-    api
-      .get<{ success: boolean; data: { statusCounts: AttendanceStatusCounts } }>('/api/student/attendance')
-      .then((res) => {
-        if (!cancelled) setAttendanceCounts(res.data.data.statusCounts);
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-    };
-  }, [retryKey]);
-
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="space-y-6">
         <div className="grid gap-4 sm:grid-cols-3">
@@ -148,7 +119,7 @@ export default function StudentDashboardPage() {
     );
   }
 
-  if (error) return <ErrorState message={error} onRetry={() => setRetryKey((k) => k + 1)} />;
+  if (error) return <ErrorState message="Failed to load dashboard." onRetry={() => mutate()} />;
   if (!data) return null;
 
   return (
@@ -198,7 +169,7 @@ export default function StudentDashboardPage() {
                   <div className="rounded-md border p-3 text-sm transition-colors hover:bg-muted">
                     <p className="font-medium">{s.name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {s.teacher ? s.teacher.name : 'No teacher assigned'} · {s.creditHours} credit hours
+                      {s.teacher ? s.teacher.name : 'No teacher assigned'} · {s.creditHours} periods/week
                     </p>
                   </div>
                 </Link>

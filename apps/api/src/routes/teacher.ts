@@ -28,7 +28,6 @@ import {
   getTeacherTimetable,
   gradeSubmission,
   markAttendance,
-  messageParent,
   publishActivity,
   reviewTeacherLeaveRequest,
   submitMonthlyReport,
@@ -46,7 +45,6 @@ router.use(verifyToken, requireRole('teacher', 'coordinator'));
 router.get('/dashboard', getDashboard);
 router.get('/fee-defaulters', getFeeDefaulters);
 router.get('/class-fees', getClassFees);
-router.post('/students/:studentId/message-parent', messageParent);
 
 // Monthly report
 router.get('/monthly-report/:monthYear', requireFeature('featureMonthlyReports'), getMonthlyReport);

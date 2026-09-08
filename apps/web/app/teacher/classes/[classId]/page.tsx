@@ -129,7 +129,7 @@ export default function TeacherClassDetailPage() {
                 <div className="flex flex-wrap gap-2">
                   {data.mySubjectsHere.map((s) => (
                     <Badge key={s.id} variant="secondary">
-                      {s.name} · {s.creditHours} credit hours
+                      {s.name} · {s.creditHours} periods/week
                     </Badge>
                   ))}
                 </div>

@@ -806,7 +806,7 @@ export async function getStudentTimetable(req: AuthRequest, res: Response): Prom
   if (!profile) return;
 
   const slots = await prisma.timetableSlot.findMany({
-    where: { classId: profile.classId },
+    where: { classId: profile.classId, subject: { isActive: true } },
     include: {
       subject: { select: { name: true, teacher: { select: { id: true, name: true } } } },
     },

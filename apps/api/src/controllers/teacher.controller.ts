@@ -5,8 +5,6 @@ import { send } from '../utils/response';
 import { auditLog } from '../utils/audit';
 import { AuthRequest } from '../middleware/auth';
 import { checkAbsenceStreak } from '../jobs/absenceStreak';
-import { notifyParentOfAbsence } from '../jobs/absenceNotify';
-import { checkLowGrade } from '../jobs/lowGradeAlert';
 import { checkFullMarks, checkPerfectWeek, checkTopOfClass } from '../jobs/badgeAward';
 import { applyLeaveAttendance } from '../utils/leaveAttendance';
 import { notifyAnnouncementAudience, notifyAnnouncementRecipients } from '../utils/announcementNotify';
@@ -429,7 +427,6 @@ export async function gradeSubmission(req: AuthRequest, res: Response): Promise<
   // Sync checks — non-fatal if either fails.
   try {
     await Promise.all([
-      checkLowGrade(submission.studentId, marks, submission.activity.totalMarks),
       checkTopOfClass(submission.activityId, submission.studentId),
       checkFullMarks(submission.studentId, marks, submission.activity.totalMarks),
     ]);
@@ -545,12 +542,9 @@ export async function markAttendance(req: AuthRequest, res: Response): Promise<v
     ip: req.ip,
   });
 
-  // Sync checks: 3-day absence streak -> email teacher; instant absence -> notify parent.
+  // Sync check: 3-day absence streak -> email teacher.
   const absentStudentIds = records.filter((r) => r.status === 'absent').map((r) => r.studentId);
-  await Promise.all([
-    ...absentStudentIds.map((studentId) => checkAbsenceStreak(studentId, subjectId, teacherId)),
-    ...absentStudentIds.map((studentId) => notifyParentOfAbsence(studentId, subjectId)),
-  ]);
+  await Promise.all(absentStudentIds.map((studentId) => checkAbsenceStreak(studentId, subjectId, teacherId)));
 
   // Perfect-week badge check for everyone just marked (idempotent — see
   // awardIfNotAlready — so re-marking the same day is harmless).
@@ -689,7 +683,7 @@ export async function getTeacherTimetable(req: AuthRequest, res: Response): Prom
   const teacherId = req.user!.userId;
 
   const slots = await prisma.timetableSlot.findMany({
-    where: { subject: { teacherId } },
+    where: { subject: { teacherId, isActive: true }, class: { isActive: true } },
     include: { subject: { select: { id: true, name: true } }, class: { select: { id: true, number: true, section: true } } },
     orderBy: [{ dayOfWeek: 'asc' }, { startTime: 'asc' }],
   });
@@ -931,68 +925,6 @@ export async function getClassFees(req: AuthRequest, res: Response): Promise<voi
       status: f.status,
     })),
   });
-}
-
-// =================================================================
-// Message a student's parent directly
-// POST /api/teacher/students/:studentId/message-parent
-// (:studentId is StudentProfile.id)
-// =================================================================
-
-const messageParentSchema = z.object({
-  message: z.string().min(1).max(1000),
-});
-
-export async function messageParent(req: AuthRequest, res: Response): Promise<void> {
-  const teacherId = req.user!.userId;
-
-  const parsed = messageParentSchema.safeParse(req.body);
-  if (!parsed.success) {
-    send(res, 400, undefined, 'Message is required');
-    return;
-  }
-
-  // Verify this student is actually in one of the teacher's classes —
-  // a teacher can only message parents of their own students.
-  const myClasses = await prisma.class.findMany({
-    where: { OR: [{ subjects: { some: { teacherId } } }, { classTeacherId: teacherId }] },
-    select: { id: true },
-  });
-  const classIds = myClasses.map((c) => c.id);
-
-  const student = await prisma.studentProfile.findFirst({
-    where: { id: req.params.studentId, classId: { in: classIds } },
-    include: { user: { select: { name: true } }, parent: { select: { userId: true } } },
-  });
-  if (!student) {
-    send(res, 404, undefined, 'Student not found in your classes');
-    return;
-  }
-  if (!student.parent) {
-    send(res, 404, undefined, 'This student has no linked parent account');
-    return;
-  }
-
-  const teacher = await prisma.user.findUnique({ where: { id: teacherId }, select: { name: true } });
-
-  const notification = await prisma.notification.create({
-    data: {
-      userId: student.parent.userId,
-      type: 'TEACHER_MESSAGE',
-      message: `${teacher?.name ?? 'A teacher'} (re: ${student.user.name}): ${parsed.data.message}`,
-    },
-  });
-
-  await auditLog({
-    userId: teacherId,
-    action: 'TEACHER_MESSAGE_PARENT',
-    targetTable: 'Notification',
-    targetId: notification.id,
-    meta: { studentId: student.id },
-    ip: req.ip,
-  });
-
-  send(res, 201, notification);
 }
 
 // =================================================================

@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import useSWR from 'swr';
 import Link from 'next/link';
-import { api } from '@/lib/api';
+import { fetcher } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -68,68 +68,28 @@ interface LeaveRequestRow {
 }
 
 export default function TeacherDashboardPage() {
-  const [data, setData] = useState<Dashboard | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Fix 3 — SWR instead of useEffect+useState: cached across navigations,
+  // deduped across re-renders, and kept fresh with a background refresh
+  // instead of a full loading spinner every time the page is revisited.
+  const { data, error, isLoading, mutate } = useSWR<Dashboard>('/api/teacher/dashboard', fetcher, {
+    refreshInterval: 60000,
+  });
+  const { data: defaultersData } = useSWR<{ monthYear: string; defaulters: FeeDefaulter[] }>(
+    '/api/teacher/fee-defaulters',
+    fetcher
+  );
+  const { data: leaveData } = useSWR<{ requests: LeaveRequestRow[] }>(
+    '/api/teacher/leave-requests?status=pending',
+    fetcher
+  );
+  const { data: classesData } = useSWR<{ classes: ClassCard[] }>('/api/teacher/classes', fetcher);
 
-  const [defaulters, setDefaulters] = useState<FeeDefaulter[]>([]);
-  const [defaultersMonth, setDefaultersMonth] = useState('');
+  const defaulters = defaultersData?.defaulters ?? [];
+  const defaultersMonth = defaultersData?.monthYear ?? '';
+  const pendingLeaveRequests = leaveData?.requests ?? [];
+  const classes = classesData?.classes ?? [];
 
-  const [pendingLeaveRequests, setPendingLeaveRequests] = useState<LeaveRequestRow[]>([]);
-
-  const [classes, setClasses] = useState<ClassCard[]>([]);
-  const [retryKey, setRetryKey] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-
-    api
-      .get<{ success: boolean; data: Dashboard }>('/api/teacher/dashboard')
-      .then((res) => {
-        if (!cancelled) setData(res.data.data);
-      })
-      .catch(() => {
-        if (!cancelled) setError('Failed to load dashboard.');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    api
-      .get<{ success: boolean; data: { monthYear: string; defaulters: FeeDefaulter[] } }>(
-        '/api/teacher/fee-defaulters'
-      )
-      .then((res) => {
-        if (cancelled) return;
-        setDefaultersMonth(res.data.data.monthYear);
-        setDefaulters(res.data.data.defaulters);
-      })
-      .catch(() => {});
-
-    api
-      .get<{ success: boolean; data: { requests: LeaveRequestRow[] } }>('/api/teacher/leave-requests', {
-        params: { status: 'pending' },
-      })
-      .then((res) => {
-        if (!cancelled) setPendingLeaveRequests(res.data.data.requests);
-      })
-      .catch(() => {});
-
-    api
-      .get<{ success: boolean; data: { classes: ClassCard[] } }>('/api/teacher/classes')
-      .then((res) => {
-        if (!cancelled) setClasses(res.data.data.classes);
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-    };
-  }, [retryKey]);
-
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="space-y-6">
         <div className="grid gap-4 sm:grid-cols-3">
@@ -173,7 +133,7 @@ export default function TeacherDashboardPage() {
       </div>
     );
   }
-  if (error) return <ErrorState message={error} onRetry={() => setRetryKey((k) => k + 1)} />;
+  if (error) return <ErrorState message="Failed to load dashboard." onRetry={() => mutate()} />;
   if (!data) return null;
 
   return (

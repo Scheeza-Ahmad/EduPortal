@@ -1,7 +1,6 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
-import { AxiosError } from 'axios';
+import { useEffect, useState } from 'react';
 import { pdf } from '@react-pdf/renderer';
 import { api } from '@/lib/api';
 import { ChallanPdfDocument } from '@/lib/challanPdf';
@@ -9,7 +8,6 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent } from '@/components/ui/card';
 import {
   Table,
@@ -19,13 +17,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from '@/components/ui/dialog';
 
 interface FeeRow {
   id: string;
@@ -55,11 +46,6 @@ function money(n: number): string {
   return `PKR ${n.toLocaleString()}`;
 }
 
-function getErrorMessage(err: unknown, fallback: string): string {
-  const axiosErr = err as AxiosError<{ error?: string }>;
-  return axiosErr.response?.data?.error ?? fallback;
-}
-
 function defaultMonthYear(): string {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -71,12 +57,6 @@ export default function TeacherClassFeesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
-
-  const [messageTarget, setMessageTarget] = useState<FeeRow | null>(null);
-  const [messageText, setMessageText] = useState('');
-  const [messageError, setMessageError] = useState<string | null>(null);
-  const [messageSending, setMessageSending] = useState(false);
-  const [messageSent, setMessageSent] = useState(false);
 
   useEffect(() => {
     if (!monthYear) return;
@@ -122,30 +102,6 @@ export default function TeacherClassFeesPage() {
       URL.revokeObjectURL(url);
     } finally {
       setDownloadingId(null);
-    }
-  }
-
-  function openMessageDialog(fee: FeeRow) {
-    setMessageTarget(fee);
-    setMessageText('');
-    setMessageError(null);
-    setMessageSent(false);
-  }
-
-  async function handleSendMessage(e: FormEvent) {
-    e.preventDefault();
-    if (!messageTarget?.studentProfileId) return;
-    setMessageError(null);
-    setMessageSending(true);
-    try {
-      await api.post(`/api/teacher/students/${messageTarget.studentProfileId}/message-parent`, {
-        message: messageText,
-      });
-      setMessageSent(true);
-    } catch (err) {
-      setMessageError(getErrorMessage(err, 'Failed to send message.'));
-    } finally {
-      setMessageSending(false);
     }
   }
 
@@ -209,14 +165,6 @@ export default function TeacherClassFeesPage() {
                       >
                         {downloadingId === fee.id ? 'Preparing...' : 'Download Challan'}
                       </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={!fee.studentProfileId}
-                        onClick={() => openMessageDialog(fee)}
-                      >
-                        Message Parent
-                      </Button>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -225,40 +173,6 @@ export default function TeacherClassFeesPage() {
           </Table>
         </div>
       )}
-
-      <Dialog open={Boolean(messageTarget)} onOpenChange={(open) => !open && setMessageTarget(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Message {messageTarget?.studentName}&apos;s Parent</DialogTitle>
-          </DialogHeader>
-          {messageSent ? (
-            <p className="text-sm text-green-700">Message sent to the parent.</p>
-          ) : (
-            <form onSubmit={handleSendMessage} className="space-y-4">
-              <div className="space-y-2">
-                <Label>Message</Label>
-                <Textarea
-                  required
-                  rows={4}
-                  value={messageText}
-                  onChange={(e) => setMessageText(e.target.value)}
-                  placeholder="e.g. Please ensure fee is cleared by the due date..."
-                />
-              </div>
-              {messageError && (
-                <p className="text-sm text-destructive" role="alert">
-                  {messageError}
-                </p>
-              )}
-              <DialogFooter>
-                <Button type="submit" disabled={messageSending}>
-                  {messageSending ? 'Sending...' : 'Send Message'}
-                </Button>
-              </DialogFooter>
-            </form>
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

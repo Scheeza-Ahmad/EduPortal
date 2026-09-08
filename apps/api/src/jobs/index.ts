@@ -6,7 +6,6 @@ import { startUngradedReminder } from './ungradedReminder';
 import { startPerformanceSnapshot } from './performanceSnapshot';
 import { startDueDateReminder } from './dueDateReminder';
 import { startWeeklyDigest } from './weeklyDigest';
-import { startMonthlyProgress } from './monthlyProgress';
 import { startWeeklyPlatformSummary } from './weeklyPlatformSummary';
 import { startInactiveTeacherAlert } from './inactiveTeacherAlert';
 import { startSchoolHealthScore } from './schoolHealthScore';
@@ -32,7 +31,6 @@ export function startJobs(): void {
     ['performanceSnapshot', startPerformanceSnapshot],
     ['dueDateReminder', startDueDateReminder],
     ['weeklyDigest', startWeeklyDigest],
-    ['monthlyProgress', startMonthlyProgress],
     ['weeklyPlatformSummary', startWeeklyPlatformSummary],
     ['inactiveTeacherAlert', startInactiveTeacherAlert],
     ['schoolHealthScore', startSchoolHealthScore],

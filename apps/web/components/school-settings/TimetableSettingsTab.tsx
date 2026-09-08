@@ -9,6 +9,14 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
 
+interface DayOverride {
+  schoolStartTime?: string;
+  schoolEndTime?: string;
+  periodDuration?: number;
+  breakStartTime?: string;
+  breakDuration?: number;
+}
+
 interface TimetableSettings {
   schoolStartTime: string;
   schoolEndTime: string;
@@ -16,6 +24,7 @@ interface TimetableSettings {
   breakStartTime: string;
   breakDuration: number;
   workingDays: string[];
+  dayOverrides: Record<string, DayOverride>;
 }
 
 const DEFAULT_SETTINGS: TimetableSettings = {
@@ -25,6 +34,7 @@ const DEFAULT_SETTINGS: TimetableSettings = {
   breakStartTime: '10:30',
   breakDuration: 20,
   workingDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+  dayOverrides: {},
 };
 
 const DAY_OPTIONS: { value: string; label: string }[] = [
@@ -49,7 +59,13 @@ function timeToMinutes(time: string): number {
 /** Same skip-the-break logic as the backend's buildDailyPeriods — used only
  * to render the live preview, the actual generation always re-derives this
  * from the saved settings. */
-function countPeriodsPerDay(s: TimetableSettings): number {
+function countPeriodsPerDay(s: {
+  schoolStartTime: string;
+  schoolEndTime: string;
+  periodDuration: number;
+  breakStartTime: string;
+  breakDuration: number;
+}): number {
   const dayStart = timeToMinutes(s.schoolStartTime);
   const dayEnd = timeToMinutes(s.schoolEndTime);
   const breakStart = timeToMinutes(s.breakStartTime);
@@ -67,6 +83,12 @@ function countPeriodsPerDay(s: TimetableSettings): number {
     cursor = periodEnd;
   }
   return count;
+}
+
+/** Merges a day's override (if any) over the base settings, for both the
+ * preview text and the override form's placeholder/default values. */
+function effectiveDaySettings(base: TimetableSettings, day: string) {
+  return { ...base, ...(base.dayOverrides[day] ?? {}) };
 }
 
 export function TimetableSettingsTab() {
@@ -100,6 +122,34 @@ export function TimetableSettingsTab() {
       workingDays: s.workingDays.includes(day)
         ? s.workingDays.filter((d) => d !== day)
         : [...s.workingDays, day],
+    }));
+  }
+
+  /** Turns a per-day override on/off — e.g. Friday being a half day.
+   * Turning it on seeds the override with the base settings so the inputs
+   * start populated; turning it off drops the day's key entirely. */
+  function toggleDayOverride(day: string, enabled: boolean) {
+    setSettings((s) => {
+      const next = { ...s.dayOverrides };
+      if (enabled) {
+        next[day] = {
+          schoolStartTime: s.schoolStartTime,
+          schoolEndTime: s.schoolEndTime,
+          periodDuration: s.periodDuration,
+          breakStartTime: s.breakStartTime,
+          breakDuration: s.breakDuration,
+        };
+      } else {
+        delete next[day];
+      }
+      return { ...s, dayOverrides: next };
+    });
+  }
+
+  function updateDayOverride(day: string, patch: Partial<DayOverride>) {
+    setSettings((s) => ({
+      ...s,
+      dayOverrides: { ...s.dayOverrides, [day]: { ...s.dayOverrides[day], ...patch } },
     }));
   }
 
@@ -210,9 +260,98 @@ export function TimetableSettingsTab() {
         </CardContent>
       </Card>
 
+      <Card>
+        <CardContent className="space-y-3 pt-6">
+          <div>
+            <p className="text-sm font-medium">Day-Specific Timings</p>
+            <p className="text-xs text-muted-foreground">
+              For a day with different hours — e.g. Friday ending early for a half day.
+            </p>
+          </div>
+          <div className="space-y-3">
+            {DAY_OPTIONS.filter((d) => settings.workingDays.includes(d.value)).map((day) => {
+              const override = settings.dayOverrides[day.value];
+              const enabled = Boolean(override);
+              const effective = effectiveDaySettings(settings, day.value);
+              return (
+                <div key={day.value} className="rounded-md border p-3 space-y-3">
+                  <label className="flex items-center gap-2 text-sm font-medium">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4"
+                      checked={enabled}
+                      onChange={(e) => toggleDayOverride(day.value, e.target.checked)}
+                    />
+                    {day.label} — different timing
+                  </label>
+
+                  {enabled && (
+                    <div className="grid grid-cols-2 gap-3 pl-6">
+                      <div className="space-y-1">
+                        <Label className="text-xs">Start Time</Label>
+                        <Input
+                          type="time"
+                          value={override?.schoolStartTime ?? settings.schoolStartTime}
+                          onChange={(e) => updateDayOverride(day.value, { schoolStartTime: e.target.value })}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">End Time</Label>
+                        <Input
+                          type="time"
+                          value={override?.schoolEndTime ?? settings.schoolEndTime}
+                          onChange={(e) => updateDayOverride(day.value, { schoolEndTime: e.target.value })}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Period Duration (min)</Label>
+                        <Input
+                          type="number"
+                          min={15}
+                          max={120}
+                          value={override?.periodDuration ?? settings.periodDuration}
+                          onChange={(e) =>
+                            updateDayOverride(day.value, { periodDuration: Number(e.target.value) })
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Break Duration (min)</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={120}
+                          value={override?.breakDuration ?? settings.breakDuration}
+                          onChange={(e) =>
+                            updateDayOverride(day.value, { breakDuration: Number(e.target.value) })
+                          }
+                        />
+                      </div>
+                      <div className="col-span-2 space-y-1">
+                        <Label className="text-xs">Break Start</Label>
+                        <Input
+                          type="time"
+                          value={override?.breakStartTime ?? settings.breakStartTime}
+                          onChange={(e) => updateDayOverride(day.value, { breakStartTime: e.target.value })}
+                        />
+                      </div>
+                      <p className="col-span-2 text-xs text-muted-foreground">
+                        {countPeriodsPerDay(effective)} periods on {day.label}.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="rounded-md border border-dashed bg-muted/30 p-3 text-sm text-muted-foreground">
-        With these settings: <span className="font-medium text-foreground">{periodsPerDay} periods per day</span>{' '}
-        ({settings.periodDuration} min each). Break at {settings.breakStartTime} for {settings.breakDuration} minutes.
+        With these settings:{' '}
+        <span className="font-medium text-foreground">{periodsPerDay} periods per day</span> ({settings.periodDuration}{' '}
+        min each) on a normal day. Break at {settings.breakStartTime} for {settings.breakDuration} minutes.
+        {Object.keys(settings.dayOverrides).length > 0 && ' Days with different timing are shown above.'}
       </div>
 
       {error && (

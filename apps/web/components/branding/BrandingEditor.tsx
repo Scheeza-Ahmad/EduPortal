@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Image from 'next/image';
 import { AxiosError } from 'axios';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -145,7 +146,14 @@ export function BrandingEditor({ title, initial, onSave, onPreviewPortal }: Bran
           <div className="space-y-2">
             <Label>Logo</Label>
             {form.logoUrl && (
-              <img src={form.logoUrl} alt="Logo preview" className="h-16 w-auto rounded border object-contain p-1" />
+              <Image
+                src={form.logoUrl}
+                alt="Logo preview"
+                width={200}
+                height={64}
+                unoptimized
+                className="h-16 w-auto rounded border object-contain p-1"
+              />
             )}
             <FileUploadField
               value={form.logoUrl}

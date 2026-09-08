@@ -18,7 +18,7 @@ interface TimetableSlot {
   startTime: string;
   endTime: string;
   room: string | null;
-  subject: { name: string; teacher: { id: string; name: string } };
+  subject: { name: string; teacher: { id: string; name: string } | null };
 }
 
 const DAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -69,7 +69,9 @@ export default function StudentTimetablePage() {
                       {slot.startTime} – {slot.endTime}
                     </TableCell>
                     <TableCell>{slot.subject.name}</TableCell>
-                    <TableCell className="text-muted-foreground">{slot.subject.teacher.name}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {slot.subject.teacher?.name ?? 'Not Assigned'}
+                    </TableCell>
                     <TableCell>{slot.room ?? '—'}</TableCell>
                   </TableRow>
                 ))}

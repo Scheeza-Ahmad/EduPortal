@@ -37,6 +37,11 @@ import {
   getBulkReportCards,
   getCalendar,
   getClasses,
+  getClassSubjectTemplates,
+  createClassSubjectTemplate,
+  updateClassSubjectTemplate,
+  deleteClassSubjectTemplate,
+  getSubjectTeacherDemand,
   getConsentFormResponses,
   getConsentForms,
   getCoordinators,
@@ -51,6 +56,7 @@ import {
   getSchoolBrandingSelf,
   getSchoolFeaturesSelf,
   getStaffLeaves,
+  getAdminDashboard,
   getStats,
   getStatsTrend,
   getStudents,
@@ -79,6 +85,7 @@ const router = Router();
 
 router.use(verifyToken, requireRole('school_admin'));
 
+router.get('/dashboard', getAdminDashboard);
 router.get('/stats', getStats);
 router.get('/stats/trend', getStatsTrend);
 
@@ -112,10 +119,18 @@ router.post('/classes/section', createClassWithSubjects);
 router.patch('/classes/:id', updateClass);
 router.delete('/classes/:id', deleteClass);
 
-// Subjects — /availability and /teachers must be registered before /:id so
-// they aren't swallowed as an id value.
+// Class-level subject templates (the redesigned Subjects page) — admin
+// defines a class NUMBER's subjects once, no teacher picked here.
+router.get('/class-subjects', getClassSubjectTemplates);
+router.post('/class-subjects', createClassSubjectTemplate);
+router.patch('/class-subjects/:id', updateClassSubjectTemplate);
+router.delete('/class-subjects/:id', deleteClassSubjectTemplate);
+
+// Subjects — /availability, /teachers and /demand must be registered before
+// /:id so they aren't swallowed as an id value.
 router.get('/subjects/availability', getSubjectAvailability);
 router.get('/subjects/teachers', getSubjectPoolTeachers);
+router.get('/subjects/demand', getSubjectTeacherDemand);
 router.get('/subjects', getSubjects);
 router.post('/subjects', createSubject);
 router.patch('/subjects/:id', updateSubject);

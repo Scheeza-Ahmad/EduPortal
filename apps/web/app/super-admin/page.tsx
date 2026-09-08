@@ -2,23 +2,25 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
 import { api } from '@/lib/api';
+import { dynamicChart } from '@/lib/dynamicChart';
 import { CHART_COLORS } from '@/lib/chartColors';
+
+// Fix 7 — recharts kept out of the initial bundle; loaded client-side only
+// when this dashboard is actually visited.
+const Bar = dynamicChart(() => import('recharts').then((m) => m.Bar));
+const BarChart = dynamicChart(() => import('recharts').then((m) => m.BarChart));
+const CartesianGrid = dynamicChart(() => import('recharts').then((m) => m.CartesianGrid));
+const Cell = dynamicChart(() => import('recharts').then((m) => m.Cell));
+const Legend = dynamicChart(() => import('recharts').then((m) => m.Legend));
+const Line = dynamicChart(() => import('recharts').then((m) => m.Line));
+const LineChart = dynamicChart(() => import('recharts').then((m) => m.LineChart));
+const Pie = dynamicChart(() => import('recharts').then((m) => m.Pie));
+const PieChart = dynamicChart(() => import('recharts').then((m) => m.PieChart));
+const ResponsiveContainer = dynamicChart(() => import('recharts').then((m) => m.ResponsiveContainer));
+const Tooltip = dynamicChart(() => import('recharts').then((m) => m.Tooltip));
+const XAxis = dynamicChart(() => import('recharts').then((m) => m.XAxis));
+const YAxis = dynamicChart(() => import('recharts').then((m) => m.YAxis));
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -504,7 +506,7 @@ export default function SuperAdminDashboardPage() {
                         innerRadius={55}
                         outerRadius={85}
                         paddingAngle={2}
-                        label={({ percent }) => `${Math.round((percent ?? 0) * 100)}%`}
+                        label={({ percent }: { percent?: number }) => `${Math.round((percent ?? 0) * 100)}%`}
                       >
                         {submissionDonutData.map((entry) => (
                           <Cell key={entry.name} fill={entry.color} stroke="#fcfcfb" strokeWidth={2} />

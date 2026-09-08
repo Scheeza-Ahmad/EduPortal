@@ -1,5 +1,4 @@
 import { Response } from 'express';
-import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
@@ -107,41 +106,138 @@ export async function getStats(req: AuthRequest, res: Response): Promise<void> {
 
 // GET /api/admin/stats/trend — last 6 weeks of school-wide attendance, for
 // the dashboard chart.
-export async function getStatsTrend(req: AuthRequest, res: Response): Promise<void> {
-  const schoolId = requireSchoolId(req, res);
-  if (!schoolId) return;
-
-  const weeks = [];
-  for (let i = 5; i >= 0; i--) {
+/** Computes the last-6-weeks attendance-rate trend for a school — all 6
+ * weekly queries fire in parallel since each is independent of the others. */
+async function computeAttendanceTrend(schoolId: string): Promise<{ weekLabel: string; attendanceRate: number }[]> {
+  const weekRanges = Array.from({ length: 6 }, (_, idx) => {
+    const i = 5 - idx;
     const weekEnd = new Date();
     weekEnd.setDate(weekEnd.getDate() - i * 7);
     const weekStart = new Date(weekEnd);
     weekStart.setDate(weekStart.getDate() - 7);
+    return { weekLabel: `Week ${6 - i}`, weekStart, weekEnd };
+  });
 
-    const records = await prisma.attendance.findMany({
-      where: { subject: { class: { schoolId } }, date: { gte: weekStart, lt: weekEnd } },
-      select: { status: true },
-    });
+  const weekRecords = await Promise.all(
+    weekRanges.map(({ weekStart, weekEnd }) =>
+      prisma.attendance.findMany({
+        where: { subject: { class: { schoolId } }, date: { gte: weekStart, lt: weekEnd } },
+        select: { status: true },
+      })
+    )
+  );
+
+  return weekRanges.map(({ weekLabel }, i) => {
+    const records = weekRecords[i];
     const rate =
       records.length > 0
         ? Math.round((records.filter((a) => a.status === 'present').length / records.length) * 100)
         : 0;
-    weeks.push({ weekLabel: `Week ${6 - i}`, attendanceRate: rate });
-  }
-
-  // Students per class, for the class-distribution chart.
-  const classes = await prisma.class.findMany({
-    where: { schoolId, isActive: true },
-    select: { number: true, section: true, _count: { select: { studentProfiles: true } } },
-    orderBy: [{ number: 'asc' }, { section: 'asc' }],
+    return { weekLabel, attendanceRate: rate };
   });
+}
+
+export async function getStatsTrend(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const [attendanceTrend, classes] = await Promise.all([
+    computeAttendanceTrend(schoolId),
+    // Students per class, for the class-distribution chart.
+    prisma.class.findMany({
+      where: { schoolId, isActive: true },
+      select: { number: true, section: true, _count: { select: { studentProfiles: true } } },
+      orderBy: [{ number: 'asc' }, { section: 'asc' }],
+    }),
+  ]);
 
   send(res, 200, {
-    attendanceTrend: weeks,
+    attendanceTrend,
     studentsByClass: classes.map((c) => ({
       classLabel: `${c.number}-${c.section}`,
       studentCount: c._count.studentProfiles,
     })),
+  });
+}
+
+// GET /api/admin/dashboard — Fix 4: everything the admin dashboard needs in
+// ONE call instead of 4-5 separate round trips (stats, trend, announcements,
+// calendar, at-risk count, pending leaves all fetched in parallel here).
+export async function getAdminDashboard(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const startOfMonth = new Date();
+  startOfMonth.setDate(1);
+  startOfMonth.setHours(0, 0, 0, 0);
+  const now = new Date();
+
+  const [
+    totalStudents,
+    totalTeachers,
+    totalClasses,
+    totalActivities,
+    presentCount,
+    totalAttendance,
+    attendanceTrend,
+    classesForChart,
+    recentAnnouncements,
+    upcomingCalendar,
+    pendingLeaves,
+    atRiskList,
+  ] = await Promise.all([
+    prisma.user.count({ where: { schoolId, role: 'student', isActive: true } }),
+    prisma.user.count({ where: { schoolId, role: { in: ['teacher', 'coordinator'] }, isActive: true } }),
+    prisma.class.count({ where: { schoolId, isActive: true } }),
+    prisma.activity.count({ where: { subject: { class: { schoolId } } } }),
+    prisma.attendance.count({
+      where: { subject: { class: { schoolId } }, date: { gte: startOfMonth }, status: 'present' },
+    }),
+    prisma.attendance.count({
+      where: { subject: { class: { schoolId } }, date: { gte: startOfMonth } },
+    }),
+    computeAttendanceTrend(schoolId),
+    prisma.class.findMany({
+      where: { schoolId, isActive: true },
+      select: { number: true, section: true, _count: { select: { studentProfiles: true } } },
+      orderBy: [{ number: 'asc' }, { section: 'asc' }],
+    }),
+    prisma.announcement.findMany({
+      where: { schoolId, isActive: true },
+      orderBy: { createdAt: 'desc' },
+      take: 3,
+      include: { author: { select: { id: true, name: true } } },
+    }),
+    prisma.academicDate.findMany({
+      where: { schoolId, date: { gte: now } },
+      orderBy: { date: 'asc' },
+      take: 3,
+    }),
+    prisma.leaveRequest.count({ where: { status: 'pending', requester: { schoolId } } }),
+    computeAtRiskList(schoolId),
+  ]);
+
+  const attendanceRate = totalAttendance > 0 ? (presentCount / totalAttendance) * 100 : 0;
+
+  send(res, 200, {
+    stats: {
+      students: totalStudents,
+      teachers: totalTeachers,
+      classes: totalClasses,
+      activities: totalActivities,
+      attendance: Math.round(attendanceRate * 10) / 10,
+    },
+    recentAnnouncements,
+    upcomingCalendar,
+    atRiskCount: atRiskList.length,
+    pendingLeaves,
+    chartData: {
+      byClass: classesForChart.map((c) => ({
+        classLabel: `${c.number}-${c.section}`,
+        studentCount: c._count.studentProfiles,
+      })),
+      attendanceTrend,
+    },
   });
 }
 
@@ -191,16 +287,6 @@ const createStudentSchema = z.object({
   dob: z.string().optional(),
   phone: z.string().optional(),
   address: z.string().optional(),
-  // Optional — when given, either links to an existing parent account with
-  // this email (so siblings share one parent login) or auto-creates a new
-  // one. Omit both to leave the student unlinked; admin can link a parent
-  // later from the student's edit screen.
-  parentName: z.string().min(1).optional(),
-  parentEmail: z.string().email().optional(),
-  // Optional — lets the admin UI's auto-generated password (Parent@{rollNo}
-  // or Parent@{4 random digits}) actually be the credential that gets set,
-  // instead of always falling back to a random one the admin never sees.
-  parentPassword: z.string().min(8).optional(),
 });
 
 export async function createStudent(req: AuthRequest, res: Response): Promise<void> {
@@ -212,8 +298,7 @@ export async function createStudent(req: AuthRequest, res: Response): Promise<vo
     send(res, 400, undefined, 'Invalid student data');
     return;
   }
-  const { name, email, password, classId, rollNo, dob, phone, address, parentName, parentEmail, parentPassword } =
-    parsed.data;
+  const { name, email, password, classId, rollNo, dob, phone, address } = parsed.data;
 
   const targetClass = await prisma.class.findFirst({
     where: { id: classId, schoolId },
@@ -230,79 +315,25 @@ export async function createStudent(req: AuthRequest, res: Response): Promise<vo
 
   const hashedPassword = await bcrypt.hash(password, 12);
 
-  // Resolve the parent link before creating the student, so a bad parent
-  // email fails the whole request cleanly instead of leaving a half-linked
-  // student behind.
-  let parentId: string | undefined;
-  let newParentPlaintextPassword: string | undefined;
-  let newParentEmail: string | undefined;
-  let newParentName: string | undefined;
-
-  if (parentEmail) {
-    // StudentProfile.parentId references ParentProfile.id, NOT User.id — a
-    // parent's login is a User row, but the link students hang off of is
-    // their one-to-one ParentProfile row.
-    const existingParent = await prisma.user.findUnique({
-      where: { email: parentEmail },
-      include: { parentProfile: true },
-    });
-    if (existingParent) {
-      if (existingParent.role !== 'parent' || existingParent.schoolId !== schoolId) {
-        send(res, 400, undefined, 'That email belongs to an account that is not a parent at this school');
-        return;
-      }
-      // Defensively backfill a ParentProfile if this parent account somehow
-      // doesn't have one yet, rather than failing the whole request.
-      parentId = existingParent.parentProfile
-        ? existingParent.parentProfile.id
-        : (await prisma.parentProfile.create({ data: { userId: existingParent.id } })).id;
-    } else {
-      // Auto-create the parent account. Uses parentName if given, else a
-      // sensible default derived from the student's name; uses the admin
-      // UI's auto-generated parentPassword if given, else a random one.
-      newParentPlaintextPassword = parentPassword ?? crypto.randomBytes(6).toString('hex');
-      newParentEmail = parentEmail;
-      newParentName = parentName?.trim() || `${name}'s Parent`;
-    }
-  }
-
   try {
-    const user = await prisma.$transaction(async (tx) => {
-      if (!parentId && newParentEmail) {
-        const parentUser = await tx.user.create({
-          data: {
-            name: newParentName!,
-            email: newParentEmail,
-            password: await bcrypt.hash(newParentPlaintextPassword!, 12),
-            role: 'parent',
-            schoolId,
-            parentProfile: { create: {} },
-          },
-          include: { parentProfile: true },
-        });
-        parentId = parentUser.parentProfile!.id;
-      }
-
-      return tx.user.create({
-        data: {
-          name,
-          email,
-          password: hashedPassword,
-          role: 'student',
-          schoolId,
-          studentProfile: {
-            create: {
-              classId,
-              rollNo,
-              dob: dob ? new Date(dob) : undefined,
-              phone,
-              address,
-              parentId,
-            },
+    const user = await prisma.user.create({
+      data: {
+        name,
+        email,
+        password: hashedPassword,
+        role: 'student',
+        schoolId,
+        studentProfile: {
+          create: {
+            classId,
+            rollNo,
+            dob: dob ? new Date(dob) : undefined,
+            phone,
+            address,
           },
         },
-        include: { studentProfile: true },
-      });
+      },
+      include: { studentProfile: true },
     });
 
     await auditLog({
@@ -310,7 +341,7 @@ export async function createStudent(req: AuthRequest, res: Response): Promise<vo
       action: 'STUDENT_CREATE',
       targetTable: 'User',
       targetId: user.id,
-      meta: { email, classId, rollNo, parentId: parentId ?? null, parentAutoCreated: Boolean(newParentEmail) },
+      meta: { email, classId, rollNo },
       ip: req.ip,
     });
 
@@ -328,25 +359,7 @@ export async function createStudent(req: AuthRequest, res: Response): Promise<vo
       console.warn('[createStudent] Welcome email failed:', err);
     }
 
-    if (newParentEmail && newParentPlaintextPassword) {
-      try {
-        await sendWelcomeEmail({
-          name: newParentName!,
-          email: newParentEmail,
-          role: 'parent',
-          schoolName: school?.name ?? 'your school',
-          password: newParentPlaintextPassword,
-        });
-      } catch (err) {
-        console.warn('[createStudent] Parent welcome email failed:', err);
-      }
-    }
-
-    send(res, 201, {
-      ...stripPassword(user),
-      parentAutoCreated: Boolean(newParentEmail),
-      parentEmail: newParentEmail ?? undefined,
-    });
+    send(res, 201, stripPassword(user));
   } catch (err) {
     if (isUniqueConstraintError(err)) {
       send(res, 400, undefined, 'Email already in use');
@@ -608,14 +621,14 @@ const bulkImportNamesSchema = z.object({
   classId: z.string().min(1),
   names: z.array(z.string().min(1)).min(1).max(200),
   schoolDomain: z.string().min(2).max(40).optional(),
-  createParents: z.boolean().optional(),
 });
 
 // POST /api/admin/students/bulk-import-names — the redesigned bulk import:
 // a plain newline-separated list of names per section instead of a CSV.
-// Sorts alphabetically, continues roll numbers from the class's current max,
-// and auto-generates email/password (and optionally a parent account) for
-// each student.
+// Sorts alphabetically, continues roll numbers from the class's current
+// max, and auto-generates email/password for each student. Parent accounts
+// are never fabricated here — a parent's email is always their real,
+// personal one, entered individually (Edit Student) after import.
 export async function bulkImportStudentsByName(req: AuthRequest, res: Response): Promise<void> {
   const schoolId = requireSchoolId(req, res);
   if (!schoolId) return;
@@ -625,7 +638,7 @@ export async function bulkImportStudentsByName(req: AuthRequest, res: Response):
     send(res, 400, undefined, 'Invalid bulk import data');
     return;
   }
-  const { classId, names, createParents } = parsed.data;
+  const { classId, names } = parsed.data;
 
   const targetClass = await prisma.class.findFirst({
     where: { id: classId, schoolId },
@@ -640,11 +653,10 @@ export async function bulkImportStudentsByName(req: AuthRequest, res: Response):
   }
 
   const [school, settings] = await Promise.all([
-    prisma.school.findUnique({ where: { id: schoolId }, select: { name: true, featureParentPortal: true } }),
+    prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } }),
     prisma.schoolSettings.findUnique({ where: { schoolId }, select: { schoolDomain: true } }),
   ]);
   const schoolDomain = parsed.data.schoolDomain ?? settings?.schoolDomain ?? 'school';
-  const shouldCreateParents = Boolean(createParents && school?.featureParentPortal);
 
   // Sort alphabetically, then compute how many can actually fit.
   const sortedNames = [...names].map((n) => n.trim()).filter(Boolean).sort((a, b) => a.localeCompare(b));
@@ -663,12 +675,11 @@ export async function bulkImportStudentsByName(req: AuthRequest, res: Response):
   let nextRollNo = Math.max(0, ...targetClass.studentProfiles.map((p) => trailingRollNumber(p.rollNo))) + 1;
 
   const created: { name: string; email: string; password: string; rollNo: string }[] = [];
-  const parents: { name: string; email: string; password: string; forStudent: string }[] = [];
   const failed: { name: string; error: string }[] = [];
 
   for (const name of sortedNames) {
     const rollNo = padRollNo(nextRollNo);
-    const { first, slug } = splitNameForEmail(name);
+    const { slug } = splitNameForEmail(name);
 
     let email = `${slug}@${schoolDomain}.edu`;
     if (await prisma.user.findUnique({ where: { email } })) {
@@ -679,47 +690,18 @@ export async function bulkImportStudentsByName(req: AuthRequest, res: Response):
     try {
       const hashedPassword = await bcrypt.hash(password, 12);
 
-      let parentId: string | undefined;
-      let parentEmail: string | undefined;
-      let parentPassword: string | undefined;
-
-      const studentUser = await prisma.$transaction(async (tx) => {
-        if (shouldCreateParents) {
-          parentEmail = `parent.${first}@${schoolDomain}.edu`;
-          if (await tx.user.findUnique({ where: { email: parentEmail } })) {
-            parentEmail = `parent.${first}${rollNo}@${schoolDomain}.edu`;
-          }
-          parentPassword = `Parent@${rollNo}`;
-          const parentUser = await tx.user.create({
-            data: {
-              name: `${name}'s Parent`,
-              email: parentEmail,
-              password: await bcrypt.hash(parentPassword, 12),
-              role: 'parent',
-              schoolId,
-              parentProfile: { create: {} },
-            },
-            include: { parentProfile: true },
-          });
-          parentId = parentUser.parentProfile!.id;
-        }
-
-        return tx.user.create({
-          data: {
-            name,
-            email,
-            password: hashedPassword,
-            role: 'student',
-            schoolId,
-            studentProfile: { create: { classId, rollNo, parentId } },
-          },
-        });
+      const studentUser = await prisma.user.create({
+        data: {
+          name,
+          email,
+          password: hashedPassword,
+          role: 'student',
+          schoolId,
+          studentProfile: { create: { classId, rollNo } },
+        },
       });
 
       created.push({ name, email, password, rollNo });
-      if (shouldCreateParents && parentEmail && parentPassword) {
-        parents.push({ name: `${name}'s Parent`, email: parentEmail, password: parentPassword, forStudent: name });
-      }
       nextRollNo += 1;
 
       try {
@@ -730,15 +712,6 @@ export async function bulkImportStudentsByName(req: AuthRequest, res: Response):
           schoolName: school?.name ?? 'your school',
           password,
         });
-        if (shouldCreateParents && parentEmail && parentPassword) {
-          await sendWelcomeEmail({
-            name: `${name}'s Parent`,
-            email: parentEmail,
-            role: 'parent',
-            schoolName: school?.name ?? 'your school',
-            password: parentPassword,
-          });
-        }
       } catch (err) {
         console.warn('[bulkImportStudentsByName] Welcome email failed:', err);
       }
@@ -754,11 +727,11 @@ export async function bulkImportStudentsByName(req: AuthRequest, res: Response):
     action: 'STUDENT_BULK_IMPORT_NAMES',
     targetTable: 'Class',
     targetId: classId,
-    meta: { createdCount: created.length, parentCount: parents.length, failedCount: failed.length },
+    meta: { createdCount: created.length, failedCount: failed.length },
     ip: req.ip,
   });
 
-  send(res, 201, { created, parents, failed });
+  send(res, 201, { created, failed });
 }
 
 // =================================================================
@@ -977,6 +950,67 @@ const addTeacherSubjectSchema = z.object({
   subjectName: z.string().min(1).max(60),
 });
 
+/** Fires the moment a teacher becomes eligible for a subject (added to
+ * their pool) — immediately fills any "Not Assigned" Subject rows of that
+ * exact name, in this teacher's wing, instead of waiting for the next
+ * timetable auto-generate. Respects the per-teacher subject cap, and skips
+ * a subject that already has timetable slots placed if this teacher is
+ * already busy at any of those exact times elsewhere in the school. */
+async function autoAssignUnassignedSubjectsToTeacher(
+  schoolId: string,
+  teacherId: string,
+  subjectName: string
+): Promise<number> {
+  const teacher = await prisma.user.findUnique({
+    where: { id: teacherId },
+    include: { teacherProfile: { select: { wing: true } } },
+  });
+  const wing = teacher?.teacherProfile?.wing;
+  if (!wing) return 0;
+
+  let remaining = MAX_SUBJECTS_PER_TEACHER - (await countTeacherSubjects(schoolId, teacherId));
+  if (remaining <= 0) return 0;
+
+  const candidates = await prisma.subject.findMany({
+    where: {
+      name: subjectName,
+      teacherId: null,
+      isActive: true,
+      class: {
+        schoolId,
+        isActive: true,
+        wing: wing === 'both' ? { in: ['junior', 'senior'] } : wing,
+      },
+    },
+    include: { timetableSlots: true },
+    orderBy: { createdAt: 'asc' },
+  });
+  if (candidates.length === 0) return 0;
+
+  const teacherSlots = await prisma.timetableSlot.findMany({ where: { subject: { teacherId, isActive: true } } });
+
+  let assigned = 0;
+  for (const subject of candidates) {
+    if (remaining <= 0) break;
+
+    // If this subject's class already has a timetable (auto-generated
+    // earlier with this subject sitting as "Not Assigned"), make sure this
+    // teacher isn't already booked elsewhere at any of those exact slots.
+    const conflict = subject.timetableSlots.some((slot) =>
+      teacherSlots.some(
+        (ts) => ts.dayOfWeek === slot.dayOfWeek && ts.startTime < slot.endTime && ts.endTime > slot.startTime
+      )
+    );
+    if (conflict) continue;
+
+    await prisma.subject.update({ where: { id: subject.id }, data: { teacherId } });
+    remaining -= 1;
+    assigned += 1;
+  }
+
+  return assigned;
+}
+
 export async function addTeacherSubjectPool(req: AuthRequest, res: Response): Promise<void> {
   const schoolId = requireSchoolId(req, res);
   if (!schoolId) return;
@@ -1008,16 +1042,31 @@ export async function addTeacherSubjectPool(req: AuthRequest, res: Response): Pr
       data: { teacherId: id, schoolId, subjectName: subjectName.trim() },
     });
 
+    // The moment this teacher becomes eligible for the subject, immediately
+    // fill any "Not Assigned" slots for it in their wing — don't make the
+    // school wait for the next timetable auto-generate.
+    const autoAssignedCount = await autoAssignUnassignedSubjectsToTeacher(schoolId, id, created.subjectName);
+
     await auditLog({
       userId: req.user!.userId,
       action: 'TEACHER_SUBJECT_ADDED',
       targetTable: 'TeacherSubject',
       targetId: created.id,
-      meta: { teacherId: id, subjectName: created.subjectName },
+      meta: { teacherId: id, subjectName: created.subjectName, autoAssignedCount },
       ip: req.ip,
     });
 
-    send(res, 201, created);
+    if (autoAssignedCount > 0) {
+      await prisma.notification.create({
+        data: {
+          userId: id,
+          type: 'subject_assigned',
+          message: `You've been assigned to teach ${created.subjectName} in ${autoAssignedCount} section(s).`,
+        },
+      });
+    }
+
+    send(res, 201, { ...created, autoAssignedCount });
   } catch (err) {
     if (isUniqueConstraintError(err)) {
       send(res, 400, undefined, 'This subject is already in the teacher\'s pool');
@@ -1208,20 +1257,14 @@ const createClassWithSubjectsSchema = z.object({
   section: z.string().min(1),
   classTeacherId: z.string().optional(),
   maxStudents: z.number().int().min(1).max(60).optional(),
-  subjects: z
-    .array(
-      z.object({
-        name: z.string().min(1),
-        teacherId: z.string().min(1),
-        creditHours: z.number().int().min(1).max(10),
-      })
-    )
-    .optional(),
 });
 
-// POST /api/admin/classes/section — the 3-step "Add Section" wizard's final
-// step: creates the class and every listed subject in one transaction, so a
-// failure partway through never leaves a section with only some subjects.
+// POST /api/admin/classes/section — creates a new section. Subjects are no
+// longer entered here: admin defines a class NUMBER's subjects once (on the
+// Subjects page, as ClassSubjectTemplate rows) and every section of that
+// number — this one included — gets a Subject row instantiated from those
+// templates automatically, with no teacher yet (teachers are auto-assigned
+// when the timetable is generated).
 export async function createClassWithSubjects(req: AuthRequest, res: Response): Promise<void> {
   const schoolId = requireSchoolId(req, res);
   if (!schoolId) return;
@@ -1231,7 +1274,7 @@ export async function createClassWithSubjects(req: AuthRequest, res: Response): 
     send(res, 400, undefined, 'Invalid class data');
     return;
   }
-  const { number, section, classTeacherId, maxStudents, subjects } = parsed.data;
+  const { number, section, classTeacherId, maxStudents } = parsed.data;
   const wing = wingForClassNumber(number);
 
   // The DB unique constraint is on (schoolId, number, section) regardless of
@@ -1259,34 +1302,10 @@ export async function createClassWithSubjects(req: AuthRequest, res: Response): 
       return;
     }
   }
-  if (subjects && subjects.length > 0) {
-    const teacherIds = [...new Set(subjects.map((s) => s.teacherId))];
-    const validTeachers = await prisma.user.findMany({
-      where: { id: { in: teacherIds }, schoolId, role: { in: ['teacher', 'coordinator'] } },
-      select: { id: true, name: true },
-    });
-    if (validTeachers.length !== teacherIds.length) {
-      send(res, 400, undefined, 'One or more subject teachers were not found in this school');
-      return;
-    }
 
-    // Each teacher's new load (subjects already assigned + how many times
-    // they appear in this same batch) must not exceed the per-teacher cap.
-    const teacherById = new Map(validTeachers.map((t) => [t.id, t.name]));
-    for (const teacherId of teacherIds) {
-      const countInThisBatch = subjects.filter((s) => s.teacherId === teacherId).length;
-      const existingCount = await countTeacherSubjects(schoolId, teacherId);
-      if (existingCount + countInThisBatch > MAX_SUBJECTS_PER_TEACHER) {
-        send(
-          res,
-          400,
-          undefined,
-          `${teacherById.get(teacherId) ?? 'This teacher'} cannot be assigned more than ${MAX_SUBJECTS_PER_TEACHER} subjects (currently has ${existingCount}).`
-        );
-        return;
-      }
-    }
-  }
+  const templates = await prisma.classSubjectTemplate.findMany({
+    where: { schoolId, classNumber: number, isActive: true },
+  });
 
   let newClass;
   try {
@@ -1299,9 +1318,12 @@ export async function createClassWithSubjects(req: AuthRequest, res: Response): 
           where: { id: inactiveDuplicate.id },
           data: { wing, classTeacherId, maxStudents: maxStudents ?? 30, isActive: true },
         });
-        // Any subjects left over from the deleted version of this section
-        // shouldn't resurface (or keep counting against their teacher's cap).
+        // Any subjects (and their timetable slots) left over from the
+        // deleted version of this section shouldn't resurface, keep
+        // counting against their teacher's cap, or ghost-appear on a
+        // teacher's timetable.
         await tx.subject.updateMany({ where: { classId: created.id }, data: { isActive: false } });
+        await tx.timetableSlot.deleteMany({ where: { classId: created.id } });
       } else {
         created = await tx.class.create({
           data: {
@@ -1315,13 +1337,14 @@ export async function createClassWithSubjects(req: AuthRequest, res: Response): 
         });
       }
 
-      if (subjects && subjects.length > 0) {
+      if (templates.length > 0) {
         await tx.subject.createMany({
-          data: subjects.map((s) => ({
-            name: s.name,
-            teacherId: s.teacherId,
-            creditHours: s.creditHours,
+          data: templates.map((t) => ({
+            name: t.name,
             classId: created.id,
+            creditHours: t.creditHours,
+            templateId: t.id,
+            teacherId: null,
           })),
         });
       }
@@ -1341,7 +1364,7 @@ export async function createClassWithSubjects(req: AuthRequest, res: Response): 
     action: 'CREATE_CLASS_WITH_SUBJECTS',
     targetTable: 'Class',
     targetId: newClass.id,
-    meta: { number, section, wing, classTeacherId, subjectCount: subjects?.length ?? 0 },
+    meta: { number, section, wing, classTeacherId, subjectCount: templates.length },
     ip: req.ip,
   });
 
@@ -1424,10 +1447,14 @@ export async function deleteClass(req: AuthRequest, res: Response): Promise<void
 
   // Soft delete, per the project-wide convention (isActive=false, never hard
   // delete) — cascade to this class's subjects too, so they stop counting
-  // against a teacher's subject cap once the class is gone.
+  // against a teacher's subject cap once the class is gone. Timetable slots
+  // ARE hard-deleted here (not soft) — a deleted class's schedule has no
+  // meaning to keep around, and leaving it would show as a ghost entry on
+  // whichever teacher it was assigned to.
   await prisma.$transaction([
     prisma.class.update({ where: { id }, data: { isActive: false } }),
     prisma.subject.updateMany({ where: { classId: id }, data: { isActive: false } }),
+    prisma.timetableSlot.deleteMany({ where: { classId: id } }),
   ]);
 
   await auditLog({
@@ -1444,6 +1471,239 @@ export async function deleteClass(req: AuthRequest, res: Response): Promise<void
 // =================================================================
 // 5. Subject Management
 // =================================================================
+
+// ---------------------------------------------------------------
+// Class-level subject templates — admin defines a class NUMBER's subjects
+// once (no teacher picked here); every section of that number gets its own
+// Subject row instantiated from these, teacherId starting null. Teachers are
+// auto-assigned when the timetable is generated (see autoGenerateTimetable).
+// ---------------------------------------------------------------
+
+export async function getClassSubjectTemplates(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const classNumber = req.query.classNumber ? Number(req.query.classNumber) : undefined;
+
+  const templates = await prisma.classSubjectTemplate.findMany({
+    where: { schoolId, isActive: true, ...(classNumber ? { classNumber } : {}) },
+    orderBy: [{ classNumber: 'asc' }, { name: 'asc' }],
+  });
+
+  send(res, 200, { templates });
+}
+
+const classSubjectTemplateSchema = z.object({
+  classNumber: z.number().int().min(1).max(10),
+  name: z.string().min(1).max(60),
+  creditHours: z.number().int().min(1).max(10),
+});
+
+export async function createClassSubjectTemplate(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = classSubjectTemplateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid subject data');
+    return;
+  }
+  const { classNumber, name, creditHours } = parsed.data;
+
+  let template;
+  try {
+    template = await prisma.classSubjectTemplate.create({
+      data: { schoolId, classNumber, name: name.trim(), creditHours },
+    });
+  } catch (err) {
+    if (isUniqueConstraintError(err)) {
+      send(res, 400, undefined, 'This subject already exists for this class.');
+      return;
+    }
+    throw err;
+  }
+
+  // Cascade — instantiate this subject in every existing active section of
+  // this class number, with no teacher yet.
+  const sections = await prisma.class.findMany({
+    where: { schoolId, number: classNumber, isActive: true },
+  });
+  if (sections.length > 0) {
+    await prisma.subject.createMany({
+      data: sections.map((s) => ({
+        name: template!.name,
+        classId: s.id,
+        creditHours,
+        templateId: template!.id,
+        teacherId: null,
+      })),
+    });
+  }
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'CLASS_SUBJECT_TEMPLATE_CREATE',
+    targetTable: 'ClassSubjectTemplate',
+    targetId: template.id,
+    meta: { classNumber, name, creditHours, sectionsAffected: sections.length },
+    ip: req.ip,
+  });
+
+  send(res, 201, template);
+}
+
+const updateClassSubjectTemplateSchema = z.object({
+  name: z.string().min(1).max(60).optional(),
+  creditHours: z.number().int().min(1).max(10).optional(),
+});
+
+export async function updateClassSubjectTemplate(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const parsed = updateClassSubjectTemplateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    send(res, 400, undefined, 'Invalid subject data');
+    return;
+  }
+
+  const { id } = req.params;
+  const existing = await prisma.classSubjectTemplate.findFirst({ where: { id, schoolId } });
+  if (!existing) {
+    send(res, 404, undefined, 'Subject not found');
+    return;
+  }
+
+  const { name, creditHours } = parsed.data;
+
+  let updated;
+  try {
+    updated = await prisma.classSubjectTemplate.update({
+      where: { id },
+      data: { name: name?.trim(), creditHours },
+    });
+  } catch (err) {
+    if (isUniqueConstraintError(err)) {
+      send(res, 400, undefined, 'This subject already exists for this class.');
+      return;
+    }
+    throw err;
+  }
+
+  // Cascade the rename/credit-hour change to every section's copy.
+  await prisma.subject.updateMany({
+    where: { templateId: id },
+    data: { name: updated.name, creditHours: updated.creditHours },
+  });
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'CLASS_SUBJECT_TEMPLATE_UPDATE',
+    targetTable: 'ClassSubjectTemplate',
+    targetId: id,
+    meta: parsed.data,
+    ip: req.ip,
+  });
+
+  send(res, 200, updated);
+}
+
+export async function deleteClassSubjectTemplate(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const { id } = req.params;
+  const existing = await prisma.classSubjectTemplate.findFirst({ where: { id, schoolId } });
+  if (!existing) {
+    send(res, 404, undefined, 'Subject not found');
+    return;
+  }
+
+  await prisma.$transaction([
+    prisma.classSubjectTemplate.update({ where: { id }, data: { isActive: false } }),
+    prisma.subject.updateMany({ where: { templateId: id }, data: { isActive: false } }),
+    // A removed subject's scheduled slots are meaningless now — delete them
+    // so they stop ghost-appearing on any teacher's timetable.
+    prisma.timetableSlot.deleteMany({ where: { subject: { templateId: id } } }),
+  ]);
+
+  await auditLog({
+    userId: req.user!.userId,
+    action: 'CLASS_SUBJECT_TEMPLATE_DELETE',
+    targetTable: 'ClassSubjectTemplate',
+    targetId: id,
+    ip: req.ip,
+  });
+
+  send(res, 200, { message: 'Subject removed from this class.' });
+}
+
+// GET /api/admin/subjects/demand — per-wing, per-subject-name teacher
+// demand for the admin dashboard: how many sections need this subject vs.
+// how many teachers in that wing actually have it in their pool.
+export async function getSubjectTeacherDemand(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  const templates = await prisma.classSubjectTemplate.findMany({ where: { schoolId, isActive: true } });
+
+  // One count per template, but each is independent of the others — fire
+  // them all at once instead of awaiting them one at a time.
+  const sectionCounts = await Promise.all(
+    templates.map((t) => prisma.class.count({ where: { schoolId, number: t.classNumber, isActive: true } }))
+  );
+
+  const demandByKey = new Map<string, { wing: 'junior' | 'senior'; subjectName: string; sectionsNeeding: number }>();
+  templates.forEach((t, i) => {
+    const wing = wingForClassNumber(t.classNumber);
+    const key = `${wing}::${t.name}`;
+    if (!demandByKey.has(key)) demandByKey.set(key, { wing, subjectName: t.name, sectionsNeeding: 0 });
+    demandByKey.get(key)!.sectionsNeeding += sectionCounts[i];
+  });
+
+  const pool = await prisma.teacherSubject.findMany({
+    where: { schoolId, teacher: { isActive: true } },
+    include: { teacher: { select: { teacherProfile: { select: { wing: true } } } } },
+  });
+  const poolCountByKey = new Map<string, number>();
+  for (const p of pool) {
+    const teacherWing = p.teacher.teacherProfile?.wing;
+    const wings: ('junior' | 'senior')[] = teacherWing === 'both' ? ['junior', 'senior'] : teacherWing ? [teacherWing] : [];
+    for (const w of wings) {
+      const key = `${w}::${p.subjectName}`;
+      poolCountByKey.set(key, (poolCountByKey.get(key) ?? 0) + 1);
+    }
+  }
+
+  const demandEntries = [...demandByKey.entries()];
+  const assignedCounts = await Promise.all(
+    demandEntries.map(([, info]) =>
+      prisma.subject.count({
+        where: {
+          class: { schoolId, isActive: true, wing: info.wing },
+          name: info.subjectName,
+          isActive: true,
+          teacherId: { not: null },
+        },
+      })
+    )
+  );
+
+  const demand = demandEntries.map(([key, info], i) => {
+    const poolTeacherCount = poolCountByKey.get(key) ?? 0;
+    return {
+      wing: info.wing,
+      subjectName: info.subjectName,
+      sectionsNeeding: info.sectionsNeeding,
+      assignedCount: assignedCounts[i],
+      poolTeacherCount,
+      shortage: Math.max(0, info.sectionsNeeding - poolTeacherCount),
+    };
+  });
+  demand.sort((a, b) => b.shortage - a.shortage || a.wing.localeCompare(b.wing) || a.subjectName.localeCompare(b.subjectName));
+
+  send(res, 200, { demand });
+}
 
 export async function getSubjects(req: AuthRequest, res: Response): Promise<void> {
   const schoolId = requireSchoolId(req, res);
@@ -1598,7 +1858,10 @@ export async function deleteSubject(req: AuthRequest, res: Response): Promise<vo
     return;
   }
 
-  await prisma.subject.update({ where: { id }, data: { isActive: false } });
+  await prisma.$transaction([
+    prisma.subject.update({ where: { id }, data: { isActive: false } }),
+    prisma.timetableSlot.deleteMany({ where: { subjectId: id } }),
+  ]);
 
   await auditLog({
     userId: req.user!.userId,
@@ -1626,7 +1889,7 @@ async function findTimetableConflict(params: {
   startTime: string;
   endTime: string;
   room?: string;
-  teacherId: string;
+  teacherId: string | null;
   excludeSlotId?: string;
 }) {
   const { schoolId, dayOfWeek, startTime, endTime, room, teacherId, excludeSlotId } = params;
@@ -1635,6 +1898,7 @@ async function findTimetableConflict(params: {
     where: {
       schoolId,
       dayOfWeek,
+      subject: { isActive: true },
       ...(excludeSlotId ? { id: { not: excludeSlotId } } : {}),
     },
     include: {
@@ -1647,7 +1911,7 @@ async function findTimetableConflict(params: {
     const overlaps = slot.startTime < endTime && slot.endTime > startTime;
     if (!overlaps) return false;
     const sameRoom = Boolean(room) && slot.room === room;
-    const sameTeacher = slot.subject.teacherId === teacherId;
+    const sameTeacher = Boolean(teacherId) && slot.subject.teacherId === teacherId;
     return sameRoom || sameTeacher;
   });
 }
@@ -1666,7 +1930,7 @@ export async function getTimetableForClass(req: AuthRequest, res: Response): Pro
   let slots;
   try {
     slots = await prisma.timetableSlot.findMany({
-      where: { classId },
+      where: { classId, subject: { isActive: true } },
       include: { subject: { include: { teacher: { select: { id: true, name: true } } } } },
       orderBy: [{ dayOfWeek: 'asc' }, { startTime: 'asc' }],
     });
@@ -1732,7 +1996,7 @@ export async function upsertTimetableSlot(req: AuthRequest, res: Response): Prom
       res,
       409,
       undefined,
-      `${conflict.subject.teacher.name} already teaches ${conflict.subject.name} in Class ${conflict.class.number}-${conflict.class.section} at this time. Choose a different time.`
+      `${conflict.subject.teacher?.name ?? 'This room'} already ${conflict.subject.teacher ? 'teaches' : 'has'} ${conflict.subject.name} in Class ${conflict.class.number}-${conflict.class.section} at this time. Choose a different time.`
     );
     return;
   }
@@ -1811,7 +2075,7 @@ export async function checkTimetableConflict(req: AuthRequest, res: Response): P
   send(res, 200, {
     conflict: Boolean(conflict),
     message: conflict
-      ? `${conflict.subject.teacher.name} already teaches ${conflict.subject.name} in Class ${conflict.class.number}-${conflict.class.section} at this time. Choose a different time.`
+      ? `${conflict.subject.teacher?.name ?? 'This room'} already ${conflict.subject.teacher ? 'teaches' : 'has'} ${conflict.subject.name} in Class ${conflict.class.number}-${conflict.class.section} at this time. Choose a different time.`
       : null,
     slot: conflict ?? null,
   });
@@ -3031,10 +3295,23 @@ function riskLevelFor(score: number): 'high' | 'medium' | 'low' {
   return 'low';
 }
 
-export async function getAtRiskStudents(req: AuthRequest, res: Response): Promise<void> {
-  const schoolId = requireSchoolId(req, res);
-  if (!schoolId) return;
+interface AtRiskResult {
+  studentId: string;
+  studentName: string;
+  className: number;
+  section: string;
+  attendanceRate: number;
+  avgGrade: number;
+  submissionRate: number;
+  riskScore: number;
+  riskLevel: 'high' | 'medium' | 'low';
+  primaryReason: string;
+}
 
+/** Shared by GET /api/admin/at-risk-students and the combined admin
+ * dashboard (which only needs the count) — computing this once and reusing
+ * it avoids running the same heavy school-wide scan twice. */
+async function computeAtRiskList(schoolId: string): Promise<AtRiskResult[]> {
   const students = await prisma.studentProfile.findMany({
     where: { user: { schoolId, isActive: true } },
     select: {
@@ -3044,16 +3321,13 @@ export async function getAtRiskStudents(req: AuthRequest, res: Response): Promis
       user: { select: { name: true } },
     },
   });
-  if (students.length === 0) {
-    send(res, 200, []);
-    return;
-  }
+  if (students.length === 0) return [];
 
   const studentUserIds = students.map((s) => s.userId);
   const studentProfileIds = students.map((s) => s.id);
   const classIds = [...new Set(students.map((s) => s.class.id))];
 
-  const [attendanceRecords, grades, submissionCounts, activitiesByClass] = await Promise.all([
+  const [attendanceRecords, grades, submissionCounts, activitiesByClass, subjectToClass] = await Promise.all([
     prisma.attendance.findMany({
       where: { studentId: { in: studentUserIds } },
       select: { studentId: true, status: true },
@@ -3072,13 +3346,15 @@ export async function getAtRiskStudents(req: AuthRequest, res: Response): Promis
       where: { subject: { classId: { in: classIds } }, isDraft: false, isActive: true },
       _count: { _all: true },
     }),
+    // Total published activities per class (sum across that class's subjects) —
+    // only depends on classIds, so it runs alongside everything else above
+    // instead of waiting for that whole batch to finish first.
+    prisma.subject.findMany({
+      where: { classId: { in: classIds } },
+      select: { id: true, classId: true },
+    }),
   ]);
 
-  // Total published activities per class (sum across that class's subjects).
-  const subjectToClass = await prisma.subject.findMany({
-    where: { classId: { in: classIds } },
-    select: { id: true, classId: true },
-  });
   const classIdBySubjectId = new Map(subjectToClass.map((s) => [s.id, s.classId]));
   const activityCountByClass = new Map<string, number>();
   for (const a of activitiesByClass) {
@@ -3145,9 +3421,14 @@ export async function getAtRiskStudents(req: AuthRequest, res: Response): Promis
     };
   });
 
-  const atRisk = results.filter((r) => r.riskScore >= 40).sort((a, b) => b.riskScore - a.riskScore);
+  return results.filter((r) => r.riskScore >= 40).sort((a, b) => b.riskScore - a.riskScore);
+}
 
-  send(res, 200, atRisk);
+export async function getAtRiskStudents(req: AuthRequest, res: Response): Promise<void> {
+  const schoolId = requireSchoolId(req, res);
+  if (!schoolId) return;
+
+  send(res, 200, await computeAtRiskList(schoolId));
 }
 
 // =================================================================
@@ -3244,7 +3525,7 @@ export async function globalSearch(req: AuthRequest, res: Response): Promise<voi
       id: sub.id,
       name: sub.name,
       classLabel: `${sub.class.number}-${sub.class.section}`,
-      teacherName: sub.teacher.name,
+      teacherName: sub.teacher?.name ?? 'Not Assigned',
     })),
   });
 }
@@ -3464,7 +3745,18 @@ const timetableSettingsSelect = {
   breakStartTime: true,
   breakDuration: true,
   workingDays: true,
+  dayOverrides: true,
 } as const;
+
+const DEFAULT_TIMETABLE_SETTINGS = {
+  schoolStartTime: '08:00',
+  schoolEndTime: '14:00',
+  periodDuration: 45,
+  breakStartTime: '10:30',
+  breakDuration: 20,
+  workingDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+  dayOverrides: {} as Record<string, DayOverride>,
+};
 
 export async function getTimetableSettings(req: AuthRequest, res: Response): Promise<void> {
   const schoolId = requireSchoolId(req, res);
@@ -3475,21 +3767,21 @@ export async function getTimetableSettings(req: AuthRequest, res: Response): Pro
     select: timetableSettingsSelect,
   });
 
-  send(
-    res,
-    200,
-    settings ?? {
-      schoolStartTime: '08:00',
-      schoolEndTime: '14:00',
-      periodDuration: 45,
-      breakStartTime: '10:30',
-      breakDuration: 20,
-      workingDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
-    }
-  );
+  send(res, 200, settings ?? DEFAULT_TIMETABLE_SETTINGS);
 }
 
 const WORKING_DAY_VALUES = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as const;
+
+// A per-day override — e.g. Friday ending earlier for a half day. Any field
+// left out falls back to the school's base timing for that day.
+const dayOverrideSchema = z.object({
+  schoolStartTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  schoolEndTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  periodDuration: z.number().int().min(15).max(120).optional(),
+  breakStartTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  breakDuration: z.number().int().min(0).max(120).optional(),
+});
+type DayOverride = z.infer<typeof dayOverrideSchema>;
 
 const timetableSettingsSchema = z.object({
   schoolStartTime: z.string().regex(/^\d{2}:\d{2}$/),
@@ -3498,6 +3790,7 @@ const timetableSettingsSchema = z.object({
   breakStartTime: z.string().regex(/^\d{2}:\d{2}$/),
   breakDuration: z.number().int().min(0).max(120),
   workingDays: z.array(z.enum(WORKING_DAY_VALUES)).min(1),
+  dayOverrides: z.record(z.enum(WORKING_DAY_VALUES), dayOverrideSchema).optional(),
 });
 
 export async function updateTimetableSettings(req: AuthRequest, res: Response): Promise<void> {
@@ -3509,16 +3802,24 @@ export async function updateTimetableSettings(req: AuthRequest, res: Response): 
     send(res, 400, undefined, 'Invalid timetable settings');
     return;
   }
-  const { schoolStartTime, schoolEndTime } = parsed.data;
+  const { schoolStartTime, schoolEndTime, dayOverrides } = parsed.data;
   if (schoolEndTime <= schoolStartTime) {
     send(res, 400, undefined, 'School end time must be after start time');
     return;
   }
+  for (const [day, override] of Object.entries(dayOverrides ?? {})) {
+    const start = override.schoolStartTime ?? schoolStartTime;
+    const end = override.schoolEndTime ?? schoolEndTime;
+    if (end <= start) {
+      send(res, 400, undefined, `${day}: end time must be after start time`);
+      return;
+    }
+  }
 
   const settings = await prisma.schoolSettings.upsert({
     where: { schoolId },
-    create: { schoolId, ...parsed.data },
-    update: parsed.data,
+    create: { schoolId, ...parsed.data, dayOverrides: dayOverrides ?? {} },
+    update: { ...parsed.data, dayOverrides: dayOverrides ?? {} },
     select: timetableSettingsSelect,
   });
 
@@ -3612,14 +3913,8 @@ export async function autoGenerateTimetable(req: AuthRequest, res: Response): Pr
     prisma.subject.findMany({ where: { classId, isActive: true } }),
   ]);
 
-  const effectiveSettings = settings ?? {
-    schoolStartTime: '08:00',
-    schoolEndTime: '14:00',
-    periodDuration: 45,
-    breakStartTime: '10:30',
-    breakDuration: 20,
-    workingDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
-  };
+  const effectiveSettings = settings ?? DEFAULT_TIMETABLE_SETTINGS;
+  const dayOverrides = (effectiveSettings.dayOverrides as Record<string, DayOverride> | null) ?? {};
 
   if (subjects.length === 0) {
     send(res, 400, undefined, 'This class has no subjects yet — add subjects before generating a timetable.');
@@ -3630,30 +3925,31 @@ export async function autoGenerateTimetable(req: AuthRequest, res: Response): Pr
     .map((d) => DAY_NAME_TO_INDEX[d])
     .filter((d): d is number => d !== undefined)
     .sort((a, b) => a - b);
-  const dailyPeriods = buildDailyPeriods(effectiveSettings);
 
-  if (workingDayIndices.length === 0 || dailyPeriods.length === 0) {
-    send(res, 400, undefined, 'No valid periods could be generated from the current school timing settings.');
-    return;
+  // Per-day period lists — a day with an override (e.g. Friday half day)
+  // gets its own start/end/break/period-duration merged over the base
+  // settings; every other working day uses the base settings unchanged.
+  const dayNameByIndex = Object.fromEntries(Object.entries(DAY_NAME_TO_INDEX).map(([name, idx]) => [idx, name]));
+  const dailyPeriodsByDay = new Map<number, { startTime: string; endTime: string }[]>();
+  for (const day of workingDayIndices) {
+    const override = dayOverrides[dayNameByIndex[day]] ?? {};
+    dailyPeriodsByDay.set(day, buildDailyPeriods({ ...effectiveSettings, ...override }));
   }
 
-  // Queue: each subject appears `creditHours` times, spread as evenly as
-  // possible across days rather than stacked on one day.
-  type QueueItem = { subjectId: string; teacherId: string; name: string };
-  const queue: QueueItem[] = [];
-  const maxRounds = Math.max(...subjects.map((s) => s.creditHours), 1);
-  for (let round = 0; round < maxRounds; round++) {
-    for (const s of subjects) {
-      if (round < s.creditHours) {
-        queue.push({ subjectId: s.id, teacherId: s.teacherId, name: s.name });
-      }
-    }
+  // A day whose merged settings produce zero periods (e.g. a half-day
+  // override too tight to fit even one period) is dropped from the working
+  // week for this run rather than failing the whole generation.
+  const usableDayIndices = workingDayIndices.filter((day) => (dailyPeriodsByDay.get(day)?.length ?? 0) > 0);
+
+  if (usableDayIndices.length === 0) {
+    send(res, 400, undefined, 'No valid periods could be generated from the current school timing settings.');
+    return;
   }
 
   // Existing slots for every OTHER class in the school — used to detect
   // teacher double-booking across the whole school, not just this class.
   const otherSlots = await prisma.timetableSlot.findMany({
-    where: { schoolId, classId: { not: classId } },
+    where: { schoolId, classId: { not: classId }, subject: { isActive: true } },
     include: {
       subject: { select: { teacherId: true, name: true } },
       class: { select: { number: true, section: true } },
@@ -3665,23 +3961,84 @@ export async function autoGenerateTimetable(req: AuthRequest, res: Response): Pr
   // periods gets priority so the load spreads fairly across staff.
   const teacherLoadMap = new Map<string, number>();
   for (const s of otherSlots) {
-    teacherLoadMap.set(s.subject.teacherId, (teacherLoadMap.get(s.subject.teacherId) ?? 0) + 1);
+    if (s.subject.teacherId) {
+      teacherLoadMap.set(s.subject.teacherId, (teacherLoadMap.get(s.subject.teacherId) ?? 0) + 1);
+    }
   }
 
-  const teacherIds = [...new Set(subjects.map((s) => s.teacherId))];
+  const alreadyAssignedTeacherIds = [...new Set(subjects.map((s) => s.teacherId).filter((id): id is string => Boolean(id)))];
   const teacherRecords = await prisma.user.findMany({
-    where: { id: { in: teacherIds } },
+    where: { id: { in: alreadyAssignedTeacherIds } },
     select: { id: true, name: true },
   });
   const teacherNameById = new Map(teacherRecords.map((t) => [t.id, t.name]));
-  for (const id of teacherIds) {
+  for (const id of alreadyAssignedTeacherIds) {
     if (!teacherLoadMap.has(id)) teacherLoadMap.set(id, 0);
   }
 
+  // Auto-assign a teacher for every subject that doesn't already have one —
+  // pulled from that subject's TeacherSubject pool, matched to this class's
+  // wing, excluding teachers already at the per-teacher subject cap, and
+  // preferring whoever currently has the lightest period load. A subject
+  // whose pool has no eligible teacher stays unassigned — every one of its
+  // slots is still placed (as "Not Assigned"), with a warning surfaced.
+  const effectiveTeacherId = new Map<string, string | null>();
+  const warnings: string[] = [];
+
+  for (const subject of subjects) {
+    if (subject.teacherId) {
+      effectiveTeacherId.set(subject.id, subject.teacherId);
+      continue;
+    }
+
+    const pool = await prisma.teacherSubject.findMany({
+      where: {
+        schoolId,
+        subjectName: subject.name,
+        teacher: {
+          isActive: true,
+          teacherProfile: { wing: { in: [targetClass.wing, 'both'] } },
+        },
+      },
+      include: { teacher: { select: { id: true, name: true } } },
+    });
+
+    // Each candidate's current subject count is independent of the others —
+    // check them all at once instead of one at a time.
+    const poolCounts = await Promise.all(pool.map((p) => countTeacherSubjects(schoolId, p.teacher.id)));
+    const eligible = pool.filter((_, i) => poolCounts[i] < MAX_SUBJECTS_PER_TEACHER).map((p) => p.teacher);
+    eligible.sort((a, b) => (teacherLoadMap.get(a.id) ?? 0) - (teacherLoadMap.get(b.id) ?? 0));
+
+    const chosen = eligible[0];
+    if (chosen) {
+      effectiveTeacherId.set(subject.id, chosen.id);
+      teacherNameById.set(chosen.id, chosen.name);
+      if (!teacherLoadMap.has(chosen.id)) teacherLoadMap.set(chosen.id, 0);
+    } else {
+      effectiveTeacherId.set(subject.id, null);
+      warnings.push(`${subject.name} needs a teacher — no available teacher found in the pool for this subject.`);
+    }
+  }
+
+  // Queue: each subject appears `creditHours` times, spread as evenly as
+  // possible across days rather than stacked on one day.
+  type QueueItem = { subjectId: string; teacherId: string | null; name: string };
+  const queue: QueueItem[] = [];
+  const maxRounds = Math.max(...subjects.map((s) => s.creditHours), 1);
+  for (let round = 0; round < maxRounds; round++) {
+    for (const s of subjects) {
+      if (round < s.creditHours) {
+        queue.push({ subjectId: s.id, teacherId: effectiveTeacherId.get(s.id) ?? null, name: s.name });
+      }
+    }
+  }
+
   // Stable-sort the queue so lower-loaded teachers are attempted first —
-  // this is what makes the fairness rule (0-period teachers get priority) hold.
+  // this is what makes the fairness rule (0-period teachers get priority)
+  // hold. Unassigned-teacher items have no load to sort by — leave them in
+  // place (they never conflict, so order doesn't affect where they land).
   const sortedQueue = [...queue].sort(
-    (a, b) => (teacherLoadMap.get(a.teacherId) ?? 0) - (teacherLoadMap.get(b.teacherId) ?? 0)
+    (a, b) => (a.teacherId ? teacherLoadMap.get(a.teacherId) ?? 0 : 0) - (b.teacherId ? teacherLoadMap.get(b.teacherId) ?? 0 : 0)
   );
 
   const DAY_INDEX_TO_NAME = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -3699,8 +4056,13 @@ export async function autoGenerateTimetable(req: AuthRequest, res: Response): Pr
     );
   }
 
-  const placed: { dayOfWeek: number; startTime: string; endTime: string; subjectId: string; teacherId: string }[] =
-    [];
+  const placed: {
+    dayOfWeek: number;
+    startTime: string;
+    endTime: string;
+    subjectId: string;
+    teacherId: string | null;
+  }[] = [];
   const skipped: { subject: string; reason: string }[] = [];
   const usedSlotKey = new Set<string>(); // `${day}-${startTime}` — this class already has something here
   const usedByDaySubject = new Set<string>(); // `${day}-${subjectId}` — avoid same subject twice same day
@@ -3708,11 +4070,11 @@ export async function autoGenerateTimetable(req: AuthRequest, res: Response): Pr
   // Fix 3 — how many periods of THIS class have landed on each working day
   // so far. Days are always tried least-filled-first, so a subject never
   // clusters into the first 2-3 days while later days sit empty.
-  const dayFillCount = new Map<number, number>(workingDayIndices.map((d) => [d, 0]));
+  const dayFillCount = new Map<number, number>(usableDayIndices.map((d) => [d, 0]));
 
   for (const item of sortedQueue) {
     let placedThisItem = false;
-    const candidateDays = [...workingDayIndices].sort(
+    const candidateDays = [...usableDayIndices].sort(
       (a, b) => (dayFillCount.get(a) ?? 0) - (dayFillCount.get(b) ?? 0)
     );
 
@@ -3721,19 +4083,23 @@ export async function autoGenerateTimetable(req: AuthRequest, res: Response): Pr
       if (usedByDaySubject.has(dayKey)) continue;
 
       let placedInDay = false;
-      for (const period of dailyPeriods) {
+      for (const period of dailyPeriodsByDay.get(day) ?? []) {
         const slotKey = `${day}-${period.startTime}`;
         if (usedSlotKey.has(slotKey)) continue;
 
-        const teacherBusyElsewhere = Boolean(findBlockingConflict(item.teacherId, day, period));
-        const teacherBusyThisRun = placed.some(
-          (s) =>
-            s.dayOfWeek === day &&
-            s.teacherId === item.teacherId &&
-            s.startTime < period.endTime &&
-            s.endTime > period.startTime
-        );
-        if (teacherBusyElsewhere || teacherBusyThisRun) continue;
+        // A subject with no assignable teacher can never conflict with
+        // anyone — it's placed as "Not Assigned" wherever there's room.
+        if (item.teacherId) {
+          const teacherBusyElsewhere = Boolean(findBlockingConflict(item.teacherId, day, period));
+          const teacherBusyThisRun = placed.some(
+            (s) =>
+              s.dayOfWeek === day &&
+              s.teacherId === item.teacherId &&
+              s.startTime < period.endTime &&
+              s.endTime > period.startTime
+          );
+          if (teacherBusyElsewhere || teacherBusyThisRun) continue;
+        }
 
         usedSlotKey.add(slotKey);
         usedByDaySubject.add(dayKey);
@@ -3745,7 +4111,9 @@ export async function autoGenerateTimetable(req: AuthRequest, res: Response): Pr
           subjectId: item.subjectId,
           teacherId: item.teacherId,
         });
-        teacherLoadMap.set(item.teacherId, (teacherLoadMap.get(item.teacherId) ?? 0) + 1);
+        if (item.teacherId) {
+          teacherLoadMap.set(item.teacherId, (teacherLoadMap.get(item.teacherId) ?? 0) + 1);
+        }
         placedInDay = true;
         placedThisItem = true;
         break;
@@ -3757,14 +4125,18 @@ export async function autoGenerateTimetable(req: AuthRequest, res: Response): Pr
       // Fix 5 — name the actual cross-class booking that blocked every slot
       // this week, when one exists, instead of a generic message.
       let reason = 'No conflict-free slot available across the week.';
-      outer: for (const day of workingDayIndices) {
-        for (const period of dailyPeriods) {
-          const conflict = findBlockingConflict(item.teacherId, day, period);
-          if (conflict) {
-            reason = `${teacherNameById.get(item.teacherId) ?? 'This teacher'} is teaching ${conflict.subject.name} in Class ${conflict.class.number}-${conflict.class.section} on ${DAY_INDEX_TO_NAME[day]} ${conflict.startTime}-${conflict.endTime} — slot skipped for ${classLabel}.`;
-            break outer;
+      if (item.teacherId) {
+        outer: for (const day of usableDayIndices) {
+          for (const period of dailyPeriodsByDay.get(day) ?? []) {
+            const conflict = findBlockingConflict(item.teacherId, day, period);
+            if (conflict) {
+              reason = `${teacherNameById.get(item.teacherId) ?? 'This teacher'} is teaching ${conflict.subject.name} in Class ${conflict.class.number}-${conflict.class.section} on ${DAY_INDEX_TO_NAME[day]} ${conflict.startTime}-${conflict.endTime} — slot skipped for ${classLabel}.`;
+              break outer;
+            }
           }
         }
+      } else {
+        reason = 'No room left in the weekly grid for this subject.';
       }
       skipped.push({ subject: item.name, reason });
     }
@@ -3777,13 +4149,13 @@ export async function autoGenerateTimetable(req: AuthRequest, res: Response): Pr
   const schedule = [...placed]
     .sort((a, b) => a.dayOfWeek - b.dayOfWeek || a.startTime.localeCompare(b.startTime))
     .map((p) => {
-      const periodIndex = dailyPeriods.findIndex((dp) => dp.startTime === p.startTime) + 1;
+      const periodIndex = (dailyPeriodsByDay.get(p.dayOfWeek) ?? []).findIndex((dp) => dp.startTime === p.startTime) + 1;
       return {
         day: DAY_INDEX_TO_NAME[p.dayOfWeek],
         period: periodIndex,
         time: `${p.startTime}-${p.endTime}`,
         subject: subjectNameById.get(p.subjectId) ?? 'Unknown',
-        teacher: teacherNameById.get(p.teacherId) ?? 'Unknown',
+        teacher: p.teacherId ? teacherNameById.get(p.teacherId) ?? 'Unknown' : 'Not Assigned',
       };
     });
 
@@ -3798,18 +4170,20 @@ export async function autoGenerateTimetable(req: AuthRequest, res: Response): Pr
     action: 'TIMETABLE_AUTO_GENERATE_PREVIEW',
     targetTable: 'Class',
     targetId: classId,
-    meta: { generated: placed.length, skipped: skipped.length },
+    meta: { generated: placed.length, skipped: skipped.length, unassignedSubjects: warnings.length },
     ip: req.ip,
   });
 
   // Fix 4 — this is a PREVIEW only, nothing is written to the DB yet. The
   // frontend shows this to the admin and, on "Approve & Save", posts `slots`
-  // back to /auto-generate/confirm to actually persist it.
+  // back to /auto-generate/confirm to actually persist it (including any
+  // newly auto-assigned teacherId, so it gets saved onto the Subject too).
   send(res, 200, {
     preview: true,
     generated: placed.length,
     skipped: skipped.length,
     conflicts: skipped,
+    warnings,
     schedule,
     teacherLoad,
     slots: placed.map((p) => ({
@@ -3817,6 +4191,7 @@ export async function autoGenerateTimetable(req: AuthRequest, res: Response): Pr
       startTime: p.startTime,
       endTime: p.endTime,
       subjectId: p.subjectId,
+      teacherId: p.teacherId,
     })),
   });
 }
@@ -3826,6 +4201,7 @@ const confirmAutoGenerateSlotSchema = z.object({
   startTime: z.string().min(1),
   endTime: z.string().min(1),
   subjectId: z.string().min(1),
+  teacherId: z.string().min(1).nullable().optional(),
 });
 
 const confirmAutoGenerateSchema = z.object({
@@ -3863,6 +4239,18 @@ export async function confirmAutoGenerateTimetable(req: AuthRequest, res: Respon
     return;
   }
 
+  // Subjects the preview auto-assigned a teacher to (they had none before) —
+  // persist that assignment now, alongside the slots themselves. Only sets
+  // it if the subject is STILL teacherless, so a manual change made between
+  // preview and confirm is never silently overwritten.
+  const subjectById = new Map(validSubjects.map((s) => [s.id, s]));
+  const newlyAssigned = new Map<string, string>(); // subjectId -> teacherId
+  for (const s of slots) {
+    if (s.teacherId && !newlyAssigned.has(s.subjectId) && subjectById.get(s.subjectId)?.teacherId == null) {
+      newlyAssigned.set(s.subjectId, s.teacherId);
+    }
+  }
+
   await prisma.$transaction([
     prisma.timetableSlot.deleteMany({ where: { classId } }),
     ...slots.map((s) =>
@@ -3877,6 +4265,9 @@ export async function confirmAutoGenerateTimetable(req: AuthRequest, res: Respon
         },
       })
     ),
+    ...[...newlyAssigned.entries()].map(([subjectId, teacherId]) =>
+      prisma.subject.update({ where: { id: subjectId }, data: { teacherId } })
+    ),
   ]);
 
   await auditLog({
@@ -3884,14 +4275,19 @@ export async function confirmAutoGenerateTimetable(req: AuthRequest, res: Respon
     action: 'TIMETABLE_AUTO_GENERATE_CONFIRMED',
     targetTable: 'Class',
     targetId: classId,
-    meta: { slotCount: slots.length },
+    meta: { slotCount: slots.length, teachersAutoAssigned: newlyAssigned.size },
     ip: req.ip,
   });
 
   // Notify every teacher whose subject is now on this timetable, and every
   // student in the class, that the published schedule has changed.
   const classLabel = `Class ${targetClass.number}-${targetClass.section}`;
-  const teacherIds = [...new Set(validSubjects.map((s) => s.teacherId))];
+  const teacherIds = [
+    ...new Set([
+      ...validSubjects.map((s) => s.teacherId).filter((id): id is string => Boolean(id)),
+      ...newlyAssigned.values(),
+    ]),
+  ];
   const studentProfiles = await prisma.studentProfile.findMany({ where: { classId }, select: { userId: true } });
 
   const notifications = [

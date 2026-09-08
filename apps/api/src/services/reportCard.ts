@@ -77,7 +77,7 @@ export async function buildReportCard(schoolId: string, studentUserId: string): 
     const subject = g.submission.activity.subject;
     const entry = bySubject.get(subject.id) ?? {
       subjectName: subject.name,
-      teacherName: subject.teacher.name,
+      teacherName: subject.teacher?.name ?? 'Not Assigned',
       activities: [],
     };
     entry.activities.push({

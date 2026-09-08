@@ -94,6 +94,10 @@ api.interceptors.response.use(
   }
 );
 
+// SWR fetcher — every endpoint here follows the `{ success, data }` envelope,
+// so this unwraps straight to the `data` payload callers actually want.
+export const fetcher = (url: string) => api.get(url).then((res) => res.data.data);
+
 /** Uploads a file to Cloudinary via the backend and returns its URL. */
 export async function uploadFile(file: File): Promise<string> {
   const formData = new FormData();

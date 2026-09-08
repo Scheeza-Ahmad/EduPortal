@@ -3,7 +3,6 @@
 import { createContext, ReactNode, useContext, useEffect, useState } from 'react';
 
 export interface SchoolFeatures {
-  featureParentPortal: boolean;
   featureAi: boolean;
   featureSms: boolean;
   featureUrdu: boolean;
@@ -26,7 +25,6 @@ export interface SchoolFeatures {
 // own column defaults, so a school with no row yet behaves the same as one
 // that explicitly has everything on.
 export const defaultFeatures: SchoolFeatures = {
-  featureParentPortal: true,
   featureAi: false,
   featureSms: false,
   featureUrdu: true,

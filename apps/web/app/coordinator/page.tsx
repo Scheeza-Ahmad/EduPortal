@@ -1,28 +1,30 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import useSWR from 'swr';
 import { useRouter } from 'next/navigation';
-import { api } from '@/lib/api';
+import { fetcher } from '@/lib/api';
+import { dynamicChart } from '@/lib/dynamicChart';
 import { useAuthStore } from '@/lib/store';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ErrorState } from '@/components/shared/ErrorState';
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+
+// Fix 7 — recharts kept out of the initial bundle; loaded client-side only
+// when this dashboard is actually visited.
+const Bar = dynamicChart(() => import('recharts').then((m) => m.Bar));
+const BarChart = dynamicChart(() => import('recharts').then((m) => m.BarChart));
+const CartesianGrid = dynamicChart(() => import('recharts').then((m) => m.CartesianGrid));
+const Cell = dynamicChart(() => import('recharts').then((m) => m.Cell));
+const Legend = dynamicChart(() => import('recharts').then((m) => m.Legend));
+const Line = dynamicChart(() => import('recharts').then((m) => m.Line));
+const LineChart = dynamicChart(() => import('recharts').then((m) => m.LineChart));
+const Pie = dynamicChart(() => import('recharts').then((m) => m.Pie));
+const PieChart = dynamicChart(() => import('recharts').then((m) => m.PieChart));
+const ReferenceLine = dynamicChart(() => import('recharts').then((m) => m.ReferenceLine));
+const ResponsiveContainer = dynamicChart(() => import('recharts').then((m) => m.ResponsiveContainer));
+const Tooltip = dynamicChart(() => import('recharts').then((m) => m.Tooltip));
+const XAxis = dynamicChart(() => import('recharts').then((m) => m.XAxis));
+const YAxis = dynamicChart(() => import('recharts').then((m) => m.YAxis));
 
 interface Stats {
   totalTeachers: number;
@@ -111,23 +113,11 @@ function shortName(name: string): string {
 export default function CoordinatorDashboardPage() {
   const router = useRouter();
   const userName = useAuthStore((s) => s.user?.name);
-  const [data, setData] = useState<Dashboard | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [retryKey, setRetryKey] = useState(0);
+  // Fix 3 — SWR instead of useEffect+useState.
+  const { data, error, isLoading, mutate } = useSWR<Dashboard>('/api/coordinator/dashboard', fetcher);
 
-  useEffect(() => {
-    setLoading(true);
-    setError(null);
-    api
-      .get<{ success: boolean; data: Dashboard }>('/api/coordinator/dashboard')
-      .then((res) => setData(res.data.data))
-      .catch(() => setError('Failed to load dashboard.'))
-      .finally(() => setLoading(false));
-  }, [retryKey]);
-
-  if (loading) return <p className="text-sm text-muted-foreground">Loading dashboard...</p>;
-  if (error) return <ErrorState message={error} onRetry={() => setRetryKey((k) => k + 1)} />;
+  if (isLoading) return <p className="text-sm text-muted-foreground">Loading dashboard...</p>;
+  if (error) return <ErrorState message="Failed to load dashboard." onRetry={() => mutate()} />;
   if (!data) return null;
 
   const teacherChartData = data.teacherActivity.map((t) => ({

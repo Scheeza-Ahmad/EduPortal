@@ -114,6 +114,7 @@ model User {
 
   @@index([schoolId])
   @@index([role])
+  @@index([schoolId, role])
 }
 
 model RefreshToken {
@@ -224,14 +225,23 @@ model Subject {
   id          String  @id @default(cuid())
   name        String
   classId     String
-  teacherId   String
+  // Nullable — a subject can exist with no teacher yet. Admin defines a
+  // class's subjects (via ClassSubjectTemplate) without picking a teacher;
+  // the teacher is auto-assigned when the timetable is generated, based on
+  // the subject's TeacherSubject pool and availability.
+  teacherId   String?
   creditHours Int
   isActive    Boolean @default(true)
+  // Links back to the class-level template this row was instantiated from
+  // (null for subjects created the old, direct way). Used to cascade
+  // template edits/deletes to every section's copy of the subject.
+  templateId  String?
 
   createdAt DateTime @default(now())
 
-  class   Class @relation(fields: [classId], references: [id])
-  teacher User  @relation("SubjectTeacher", fields: [teacherId], references: [id])
+  class    Class                 @relation(fields: [classId], references: [id])
+  teacher  User?                 @relation("SubjectTeacher", fields: [teacherId], references: [id])
+  template ClassSubjectTemplate? @relation(fields: [templateId], references: [id])
 
   activities     Activity[]
   attendance     Attendance[]
@@ -239,6 +249,30 @@ model Subject {
 
   @@index([classId])
   @@index([teacherId])
+  @@index([templateId])
+  @@index([classId, teacherId])
+}
+
+// A class-NUMBER-level subject definition (e.g. "Class 3" -> Mathematics,
+// English, ...) — set once by the admin on the Subjects page and shared by
+// every section of that class number (3-A, 3-B, 3-C...). Carries no
+// teacher; each section gets its own Subject row (teacherId starts null,
+// auto-assigned at timetable-generation time).
+model ClassSubjectTemplate {
+  id          String  @id @default(cuid())
+  schoolId    String
+  classNumber Int // 1-10
+  name        String
+  creditHours Int
+  isActive    Boolean @default(true)
+
+  createdAt DateTime @default(now())
+
+  subjects Subject[]
+
+  @@unique([schoolId, classNumber, name])
+  @@index([schoolId])
+  @@index([classNumber])
 }
 
 // A teacher's pool of subjects they are eligible to teach (distinct from
@@ -334,6 +368,7 @@ model TimetableSlot {
   @@index([schoolId])
   @@index([classId])
   @@index([subjectId])
+  @@index([classId, dayOfWeek])
 }
 
 model AcademicDate {
@@ -376,6 +411,7 @@ model Activity {
 
   @@index([subjectId])
   @@index([dueDate])
+  @@index([subjectId, isDraft])
 }
 
 model Submission {
@@ -431,6 +467,7 @@ model Attendance {
   @@unique([studentId, subjectId, date])
   @@index([studentId])
   @@index([subjectId])
+  @@index([studentId, date])
 }
 
 // ---------------------------------------------------------------
@@ -511,6 +548,7 @@ model Notification {
   user User @relation(fields: [userId], references: [id])
 
   @@index([userId])
+  @@index([userId, isRead])
 }
 
 model Badge {
@@ -565,6 +603,10 @@ model SchoolSettings {
   breakStartTime  String   @default("10:30")
   breakDuration   Int      @default(20)
   workingDays     String[] @default(["monday", "tuesday", "wednesday", "thursday", "friday"])
+  // Per-day overrides of the fields above — e.g. { "friday": { "schoolEndTime": "12:00" } }
+  // for a Friday half day. Any field omitted for a day falls back to the
+  // base settings above. Keyed by lowercase day name from workingDays.
+  dayOverrides    Json     @default("{}")
 
   // White-labeling / branding
   portalName   String?

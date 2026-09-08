@@ -1,8 +1,9 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
+import useSWR from 'swr';
 import { AxiosError } from 'axios';
-import { api } from '@/lib/api';
+import { api, fetcher } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -34,7 +35,6 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { ErrorState } from '@/components/shared/ErrorState';
-import { useFeatures } from '@/lib/FeaturesContext';
 
 type Wing = 'junior' | 'senior' | 'both';
 
@@ -56,14 +56,12 @@ interface TeacherOption {
   teachingSubjects: { id: string }[];
 }
 
-interface PoolTeacher {
+interface ClassSubjectTemplate {
   id: string;
+  classNumber: number;
   name: string;
-  wing: Wing | null;
-  currentSubjectCount: number;
+  creditHours: number;
 }
-
-const MAX_SUBJECTS_PER_TEACHER = 3;
 
 interface Student {
   id: string;
@@ -87,29 +85,6 @@ interface SectionForm {
   maxStudents: string;
 }
 
-interface SubjectRow {
-  name: string;
-  teacherId: string;
-  creditHours: string;
-}
-
-const JUNIOR_SUBJECT_SUGGESTIONS = ['Urdu', 'English', 'Mathematics', 'Islamiat', 'General Knowledge'];
-const SENIOR_SUBJECT_SUGGESTIONS = [
-  'Urdu',
-  'English',
-  'Mathematics',
-  'Physics',
-  'Chemistry',
-  'Biology',
-  'Computer Science',
-  'Islamiat',
-];
-
-function emptySubjectRows(wing: 'junior' | 'senior'): SubjectRow[] {
-  const suggestions = wing === 'junior' ? JUNIOR_SUBJECT_SUGGESTIONS : SENIOR_SUBJECT_SUGGESTIONS;
-  return suggestions.map((name) => ({ name, teacherId: '', creditHours: '3' }));
-}
-
 interface StudentForm {
   name: string;
   email: string;
@@ -119,9 +94,6 @@ interface StudentForm {
   dob: string;
   phone: string;
   address: string;
-  parentName: string;
-  parentEmail: string;
-  parentPassword: string;
 }
 
 const EMPTY_STUDENT_FORM: StudentForm = {
@@ -133,9 +105,6 @@ const EMPTY_STUDENT_FORM: StudentForm = {
   dob: '',
   phone: '',
   address: '',
-  parentName: '',
-  parentEmail: '',
-  parentPassword: '',
 };
 
 /** Random 4-digit suffix used when there's no roll number yet to derive a
@@ -185,8 +154,6 @@ interface BulkPreviewRow {
   email: string;
   password: string;
   rollNo: string;
-  parentEmail?: string;
-  parentPassword?: string;
 }
 
 /** Capacity bar + FULL/Almost Full badge for one section card. */
@@ -220,10 +187,21 @@ function CapacityBadge({ filled, max }: { filled: number; max: number }) {
 }
 
 export default function StudentsClassesPage() {
-  const [classes, setClasses] = useState<ClassSection[]>([]);
-  const [teachers, setTeachers] = useState<TeacherOption[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Fix 3 — SWR for the two main list loads. `loadClasses` keeps its
+  // original name and signature (it's called from ~10 places after
+  // mutations elsewhere on this page) but now just triggers an SWR
+  // revalidation instead of a manual setState, so the same data is
+  // shared/cached instead of being re-fetched from scratch every time.
+  const {
+    data: classesData,
+    error: classesError,
+    isLoading: loading,
+    mutate: mutateClasses,
+  } = useSWR<{ classes: ClassSection[] }>('/api/admin/classes', fetcher);
+  const { data: teachersData } = useSWR<{ teachers: TeacherOption[] }>('/api/admin/teachers', fetcher);
+  const classes = classesData?.classes ?? [];
+  const teachers = teachersData?.teachers ?? [];
+  const error = classesError ? getErrorMessage(classesError, 'Failed to load classes.') : null;
 
   const [activeWing, setActiveWing] = useState<'junior' | 'senior'>('junior');
 
@@ -240,32 +218,10 @@ export default function StudentsClassesPage() {
   const [sectionSubmitting, setSectionSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  // Add-section wizard (3 steps) — editing an existing section stays a
-  // single simple form, only creation goes through the wizard.
-  const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1);
-  const [subjectRows, setSubjectRows] = useState<SubjectRow[]>([]);
-
-  // Fix 4 — subject-pool-matching teachers for the Step 2 dropdown, keyed by
-  // the exact subject name typed into that row. Fetched lazily as each name
-  // stabilizes (on blur) rather than on every keystroke.
-  const [poolTeachersBySubject, setPoolTeachersBySubject] = useState<Record<string, PoolTeacher[]>>({});
-  const [poolLoadingSubject, setPoolLoadingSubject] = useState<string | null>(null);
-
-  async function fetchPoolTeachersForSubject(subjectName: string) {
-    const key = subjectName.trim();
-    if (!key || poolTeachersBySubject[key]) return;
-    setPoolLoadingSubject(key);
-    try {
-      const res = await api.get<{ success: boolean; data: { teachers: PoolTeacher[] } }>(
-        `/api/admin/subjects/teachers?subjectName=${encodeURIComponent(key)}&wing=${activeWing}`
-      );
-      setPoolTeachersBySubject((prev) => ({ ...prev, [key]: res.data.data.teachers }));
-    } catch {
-      // Non-fatal — the dropdown falls back to showing every wing teacher.
-    } finally {
-      setPoolLoadingSubject(null);
-    }
-  }
+  // Read-only preview of the class-number's subject templates, shown in the
+  // Add Section form so admin knows what will be auto-created — subjects
+  // themselves are managed on the Subjects page, not asked for here.
+  const [sectionTemplatePreview, setSectionTemplatePreview] = useState<ClassSubjectTemplate[]>([]);
 
   // Inline student roster per expanded section
   const [expandedSectionId, setExpandedSectionId] = useState<string | null>(null);
@@ -281,14 +237,15 @@ export default function StudentsClassesPage() {
   const [studentSubmitting, setStudentSubmitting] = useState(false);
   const [togglingStudentId, setTogglingStudentId] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  // Surfaces a failed mutation (delete/deactivate) — separate from `error`
+  // above, which is specifically the SWR-driven "classes failed to load" state.
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Fix 6 — which auto-generated fields the admin has manually overridden;
   // an untouched field keeps re-deriving itself as name/roll no change.
   const [studentAutoTouched, setStudentAutoTouched] = useState({
     email: false,
     password: false,
-    parentEmail: false,
-    parentPassword: false,
   });
 
   // Bulk import — redesigned per Fix 5: a newline-separated name list per
@@ -296,48 +253,21 @@ export default function StudentsClassesPage() {
   const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
   const [bulkClassId, setBulkClassId] = useState('');
   const [bulkNamesText, setBulkNamesText] = useState('');
-  const [bulkCreateParents, setBulkCreateParents] = useState(false);
   const [bulkPreview, setBulkPreview] = useState<BulkPreviewRow[] | null>(null);
   const [bulkPreviewing, setBulkPreviewing] = useState(false);
   const [bulkSubmitting, setBulkSubmitting] = useState(false);
   const [bulkResult, setBulkResult] = useState<{
     created: { name: string; email: string; password: string; rollNo: string }[];
-    parents: { name: string; email: string; password: string; forStudent: string }[];
     failed: { name: string; error: string }[];
   } | null>(null);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [schoolDomain, setSchoolDomain] = useState('school');
-  const { hasFeature } = useFeatures();
 
   async function loadClasses() {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await api.get<{ success: boolean; data: { classes: ClassSection[] } }>(
-        '/api/admin/classes'
-      );
-      setClasses(res.data.data.classes);
-    } catch (err) {
-      setError(getErrorMessage(err, 'Failed to load classes.'));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function loadTeachers() {
-    try {
-      const res = await api.get<{ success: boolean; data: { teachers: TeacherOption[] } }>(
-        '/api/admin/teachers'
-      );
-      setTeachers(res.data.data.teachers);
-    } catch {
-      // Non-fatal — the class teacher dropdown will just be empty.
-    }
+    await mutateClasses();
   }
 
   useEffect(() => {
-    loadClasses();
-    loadTeachers();
     api
       .get<{ success: boolean; data: { schoolDomain?: string } }>('/api/admin/school-settings/branding')
       .then((res) => setSchoolDomain(res.data.data.schoolDomain || 'school'))
@@ -382,28 +312,6 @@ export default function StudentsClassesPage() {
     return teachers.filter((t) => t.teacherProfile?.wing === wing || t.teacherProfile?.wing === 'both');
   }
 
-  /** Wizard Step 2's teacher dropdown for a given row — only teachers whose
-   * subject pool contains that exact subject name, once the pool lookup for
-   * that name has resolved. Falls back to every wing teacher until then. */
-  function teachersForSubjectRow(subjectName: string): TeacherOption[] {
-    const key = subjectName.trim();
-    const pool = poolTeachersBySubject[key];
-    if (!pool) return teachersForWing(activeWing);
-    const poolIds = new Set(pool.map((p) => p.id));
-    return teachersForWing(activeWing).filter((t) => poolIds.has(t.id));
-  }
-
-  /** A teacher's subject count as it would be *after* this wizard session
-   * saves — their existing count plus how many rows in the current draft
-   * already have them assigned (excluding the row being edited, so picking
-   * "None" then re-picking the same teacher for one row isn't blocked by
-   * itself). */
-  function subjectCountFor(teacherId: string, excludeRowIndex?: number): number {
-    const existing = teachers.find((t) => t.id === teacherId)?.teachingSubjects.length ?? 0;
-    const inDraft = subjectRows.filter((r, i) => i !== excludeRowIndex && r.teacherId === teacherId).length;
-    return existing + inDraft;
-  }
-
   function sectionsFor(number: number): ClassSection[] {
     return classes
       .filter((c) => c.number === number && c.isActive)
@@ -412,14 +320,22 @@ export default function StudentsClassesPage() {
 
   // ---- Section dialog ----
 
+  async function loadSectionTemplatePreview(number: number) {
+    try {
+      const res = await api.get<{ success: boolean; data: { templates: ClassSubjectTemplate[] } }>(
+        `/api/admin/class-subjects?classNumber=${number}`
+      );
+      setSectionTemplatePreview(res.data.data.templates);
+    } catch {
+      setSectionTemplatePreview([]);
+    }
+  }
+
   function openAddSectionDialog(number: number) {
     setEditingSection(null);
     setSectionForm({ number: String(number), section: 'A', classTeacherId: '', maxStudents: '30' });
     setSectionFormError(null);
-    setWizardStep(1);
-    const rows = emptySubjectRows(activeWing);
-    setSubjectRows(rows);
-    rows.forEach((r) => fetchPoolTeachersForSubject(r.name));
+    loadSectionTemplatePreview(number);
     setSectionDialogOpen(true);
   }
 
@@ -447,17 +363,11 @@ export default function StudentsClassesPage() {
           maxStudents: Number(sectionForm.maxStudents),
         });
       } else {
-        const usableSubjects = subjectRows.filter((r) => r.name.trim() && r.teacherId);
         await api.post('/api/admin/classes/section', {
           number: Number(sectionForm.number),
           section: sectionForm.section,
           classTeacherId: sectionForm.classTeacherId || undefined,
           maxStudents: Number(sectionForm.maxStudents) || 30,
-          subjects: usableSubjects.map((r) => ({
-            name: r.name.trim(),
-            teacherId: r.teacherId,
-            creditHours: Number(r.creditHours) || 1,
-          })),
         });
       }
       setSectionDialogOpen(false);
@@ -469,25 +379,13 @@ export default function StudentsClassesPage() {
     }
   }
 
-  function addSubjectRow() {
-    setSubjectRows((rows) => [...rows, { name: '', teacherId: '', creditHours: '3' }]);
-  }
-
-  function updateSubjectRow(index: number, patch: Partial<SubjectRow>) {
-    setSubjectRows((rows) => rows.map((r, i) => (i === index ? { ...r, ...patch } : r)));
-  }
-
-  function removeSubjectRow(index: number) {
-    setSubjectRows((rows) => rows.filter((_, i) => i !== index));
-  }
-
   async function handleDeleteSection(section: ClassSection) {
     setDeletingId(section.id);
     try {
       await api.delete(`/api/admin/classes/${section.id}`);
       await loadClasses();
     } catch (err) {
-      setError(getErrorMessage(err, 'Failed to delete section.'));
+      setActionError(getErrorMessage(err, 'Failed to delete section.'));
     } finally {
       setDeletingId(null);
     }
@@ -500,16 +398,15 @@ export default function StudentsClassesPage() {
     setStudentForm({ ...EMPTY_STUDENT_FORM, classId });
     setStudentFormError(null);
     setSuccessMsg(null);
-    setStudentAutoTouched({ email: false, password: false, parentEmail: false, parentPassword: false });
+    setStudentAutoTouched({ email: false, password: false });
     setStudentDialogOpen(true);
   }
 
-  /** Fix 6 — auto-fills email/password (and parent equivalents) from the
-   * student's name as it's typed, without clobbering anything the admin has
-   * already edited by hand. */
+  /** Auto-fills the student's own email/password from their name as it's
+   * typed, without clobbering anything the admin has already edited by hand. */
   useEffect(() => {
     if (editingStudent || !studentDialogOpen) return;
-    const { first, slug } = splitNameForEmail(studentForm.name);
+    const { slug } = splitNameForEmail(studentForm.name);
     if (!studentForm.name.trim()) return;
 
     setStudentForm((f) => {
@@ -519,12 +416,6 @@ export default function StudentsClassesPage() {
       }
       if (!studentAutoTouched.password) {
         next.password = f.rollNo ? `Student@${f.rollNo}` : `Stu@${randomDigits(4)}`;
-      }
-      if (!studentAutoTouched.parentEmail) {
-        next.parentEmail = `parent.${first}@${schoolDomain}.edu`;
-      }
-      if (!studentAutoTouched.parentPassword) {
-        next.parentPassword = f.rollNo ? `Parent@${f.rollNo}` : `Parent@${randomDigits(4)}`;
       }
       return next;
     });
@@ -546,9 +437,6 @@ export default function StudentsClassesPage() {
       dob: student.studentProfile?.dob ? student.studentProfile.dob.slice(0, 10) : '',
       phone: student.studentProfile?.phone ?? '',
       address: student.studentProfile?.address ?? '',
-      parentName: '',
-      parentEmail: '',
-      parentPassword: '',
     });
     setStudentFormError(null);
     setStudentDialogOpen(true);
@@ -578,10 +466,7 @@ export default function StudentsClassesPage() {
           address: studentForm.address || undefined,
         });
       } else {
-        const res = await api.post<{
-          success: boolean;
-          data: { parentAutoCreated: boolean; parentEmail?: string };
-        }>('/api/admin/students', {
+        await api.post('/api/admin/students', {
           name: studentForm.name,
           email: studentForm.email,
           password: studentForm.password,
@@ -590,17 +475,8 @@ export default function StudentsClassesPage() {
           dob: studentForm.dob || undefined,
           phone: studentForm.phone || undefined,
           address: studentForm.address || undefined,
-          parentName: studentForm.parentName || undefined,
-          parentEmail: studentForm.parentEmail || undefined,
-          parentPassword: studentForm.parentEmail ? studentForm.parentPassword || undefined : undefined,
         });
-        if (res.data.data.parentAutoCreated) {
-          setSuccessMsg(
-            `Student created — a new parent account was auto-created for ${res.data.data.parentEmail} and emailed their login details.`
-          );
-        } else if (studentForm.parentEmail) {
-          setSuccessMsg('Student created and linked to the existing parent account.');
-        }
+        setSuccessMsg('Student created.');
       }
       setStudentDialogOpen(false);
       await refreshAfterStudentChange(studentForm.classId);
@@ -619,7 +495,7 @@ export default function StudentsClassesPage() {
         await refreshAfterStudentChange(student.studentProfile.classId);
       }
     } catch (err) {
-      setError(getErrorMessage(err, 'Failed to update student status.'));
+      setActionError(getErrorMessage(err, 'Failed to update student status.'));
     } finally {
       setTogglingStudentId(null);
     }
@@ -630,7 +506,6 @@ export default function StudentsClassesPage() {
   function openBulkDialog(classId?: string) {
     setBulkClassId(classId ?? '');
     setBulkNamesText('');
-    setBulkCreateParents(false);
     setBulkPreview(null);
     setBulkResult(null);
     setBulkError(null);
@@ -669,15 +544,13 @@ export default function StudentsClassesPage() {
 
       const preview: BulkPreviewRow[] = names.map((name) => {
         const rollNo = padRollNo(nextRollNo);
-        const { first, slug } = splitNameForEmail(name);
+        const { slug } = splitNameForEmail(name);
         nextRollNo += 1;
         return {
           name,
           email: `${slug}@${schoolDomain}.edu`,
           password: `Student@${rollNo}`,
           rollNo,
-          parentEmail: bulkCreateParents ? `parent.${first}@${schoolDomain}.edu` : undefined,
-          parentPassword: bulkCreateParents ? `Parent@${rollNo}` : undefined,
         };
       });
       setBulkPreview(preview);
@@ -696,14 +569,12 @@ export default function StudentsClassesPage() {
         success: boolean;
         data: {
           created: { name: string; email: string; password: string; rollNo: string }[];
-          parents: { name: string; email: string; password: string; forStudent: string }[];
           failed: { name: string; error: string }[];
         };
       }>('/api/admin/students/bulk-import-names', {
         classId: bulkClassId,
         names: parseBulkNames(),
         schoolDomain,
-        createParents: bulkCreateParents,
       });
       setBulkResult(res.data.data);
       setBulkPreview(null);
@@ -875,6 +746,12 @@ export default function StudentsClassesPage() {
         </div>
       )}
 
+      {actionError && (
+        <p className="text-sm text-destructive" role="alert">
+          {actionError}
+        </p>
+      )}
+
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading classes...</p>
       ) : error ? (
@@ -987,257 +864,126 @@ export default function StudentsClassesPage() {
         </Dialog>
       )}
 
-      {/* Add Section — 3-step wizard: Basic Info -> Subjects -> Review */}
+      {/* Add Section — only max students + class teacher are asked here.
+          Subjects come from that class number's template (Subjects page) and
+          teachers are auto-assigned when the timetable is generated. */}
       {!editingSection && (
         <Dialog open={sectionDialogOpen} onOpenChange={setSectionDialogOpen}>
           <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>
-                Add Section — Step {wizardStep} of 3:{' '}
-                {wizardStep === 1 ? 'Basic Info' : wizardStep === 2 ? 'Subjects' : 'Review & Create'}
-              </DialogTitle>
+              <DialogTitle>Add Section</DialogTitle>
             </DialogHeader>
 
-            {wizardStep === 1 && (
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Class Number</Label>
-                    <Select
-                      value={sectionForm.number}
-                      onValueChange={(v) => setSectionForm((f) => ({ ...f, number: v }))}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Number" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {(activeWing === 'junior' ? JUNIOR_NUMBERS : SENIOR_NUMBERS).map((n) => (
-                          <SelectItem key={n} value={String(n)}>
-                            {n}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Section</Label>
-                    <Select
-                      value={sectionForm.section}
-                      onValueChange={(v) => setSectionForm((f) => ({ ...f, section: v as 'A' | 'B' | 'C' }))}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {SECTION_LETTERS.map((letter) => (
-                          <SelectItem key={letter} value={letter}>
-                            {letter}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
+            <form onSubmit={handleSectionSubmit} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label>Class Teacher (optional)</Label>
+                  <Label>Class Number</Label>
                   <Select
-                    value={sectionForm.classTeacherId || 'none'}
-                    onValueChange={(v) =>
-                      setSectionForm((f) => ({ ...f, classTeacherId: v === 'none' ? '' : v }))
-                    }
+                    value={sectionForm.number}
+                    onValueChange={(v) => {
+                      setSectionForm((f) => ({ ...f, number: v }));
+                      loadSectionTemplatePreview(Number(v));
+                    }}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Select a teacher" />
+                      <SelectValue placeholder="Number" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="none">None</SelectItem>
-                      {teachersForWing(activeWing).map((t) => (
-                        <SelectItem key={t.id} value={t.id}>
-                          {t.name}
+                      {(activeWing === 'junior' ? JUNIOR_NUMBERS : SENIOR_NUMBERS).map((n) => (
+                        <SelectItem key={n} value={String(n)}>
+                          {n}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
-                  {teachersForWing(activeWing).length === 0 && (
-                    <p className="text-xs text-muted-foreground">No teachers assigned to this wing yet.</p>
-                  )}
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="new-max-students">Max Students</Label>
-                  <Input
-                    id="new-max-students"
-                    type="number"
-                    min={1}
-                    max={60}
-                    value={sectionForm.maxStudents}
-                    onChange={(e) => setSectionForm((f) => ({ ...f, maxStudents: e.target.value }))}
-                  />
-                </div>
-
-                <DialogFooter>
-                  <Button type="button" onClick={() => setWizardStep(2)}>
-                    Next →
-                  </Button>
-                </DialogFooter>
-              </div>
-            )}
-
-            {wizardStep === 2 && (
-              <div className="space-y-4">
-                <div>
-                  <p className="text-sm font-medium">
-                    Add subjects for Class {sectionForm.number} - {sectionForm.section}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    These subjects will be created for this section. All sections of Class{' '}
-                    {sectionForm.number} will share these subject names — you can assign different
-                    teachers per section.
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  {subjectRows.map((row, i) => {
-                    const rowTeacherCount = row.teacherId ? subjectCountFor(row.teacherId, i) : 0;
-                    const rowTeacherAtCap = rowTeacherCount >= MAX_SUBJECTS_PER_TEACHER;
-                    const eligibleTeachers = teachersForSubjectRow(row.name);
-                    const poolResolved = Boolean(poolTeachersBySubject[row.name.trim()]);
-                    const noTeacherAvailable = row.name.trim().length > 0 && poolResolved && eligibleTeachers.length === 0;
-                    return (
-                    <div key={i} className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <Input
-                        placeholder="Subject Name"
-                        value={row.name}
-                        onChange={(e) => updateSubjectRow(i, { name: e.target.value })}
-                        onBlur={(e) => fetchPoolTeachersForSubject(e.target.value)}
-                        className="flex-1"
-                      />
-                      <Select
-                        value={row.teacherId || 'none'}
-                        onValueChange={(v) => updateSubjectRow(i, { teacherId: v === 'none' ? '' : v })}
-                      >
-                        <SelectTrigger className="w-[220px] shrink-0">
-                          <SelectValue placeholder="Teacher" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">Select teacher</SelectItem>
-                          {eligibleTeachers.map((t) => {
-                            const count = subjectCountFor(t.id, i);
-                            return (
-                              <SelectItem key={t.id} value={t.id} disabled={count >= MAX_SUBJECTS_PER_TEACHER}>
-                                {t.name} ({count}/{MAX_SUBJECTS_PER_TEACHER} subjects)
-                              </SelectItem>
-                            );
-                          })}
-                        </SelectContent>
-                      </Select>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={10}
-                        value={row.creditHours}
-                        onChange={(e) => updateSubjectRow(i, { creditHours: e.target.value })}
-                        className="w-16 shrink-0"
-                        title="Credit hours"
-                      />
-                      <Button
-                        type="button"
-                        variant="destructive"
-                        size="sm"
-                        onClick={() => removeSubjectRow(i)}
-                      >
-                        Remove
-                      </Button>
-                    </div>
-                    {poolLoadingSubject === row.name.trim() && (
-                      <p className="text-xs text-muted-foreground">Checking teacher availability...</p>
-                    )}
-                    {noTeacherAvailable && (
-                      <p className="text-xs text-destructive">
-                        No teacher available for this subject. Add subject to a teacher&apos;s pool first.
-                      </p>
-                    )}
-                    {rowTeacherAtCap && (
-                      <p className="text-xs text-destructive">
-                        ⚠️ {teacherName(row.teacherId)} already has {MAX_SUBJECTS_PER_TEACHER} subjects
-                        assigned.
-                      </p>
-                    )}
-                    </div>
-                    );
-                  })}
-                </div>
-
-                <Button type="button" variant="outline" size="sm" onClick={addSubjectRow}>
-                  + Add Subject
-                </Button>
-
-                <DialogFooter className="gap-2">
-                  <Button type="button" variant="outline" onClick={() => setWizardStep(1)}>
-                    ← Back
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={() => setWizardStep(3)}
-                    disabled={subjectRows.some(
-                      (row, i) => row.teacherId && subjectCountFor(row.teacherId, i) >= MAX_SUBJECTS_PER_TEACHER
-                    )}
+                  <Label>Section</Label>
+                  <Select
+                    value={sectionForm.section}
+                    onValueChange={(v) => setSectionForm((f) => ({ ...f, section: v as 'A' | 'B' | 'C' }))}
                   >
-                    Next →
-                  </Button>
-                </DialogFooter>
-              </div>
-            )}
-
-            {wizardStep === 3 && (
-              <form onSubmit={handleSectionSubmit} className="space-y-4">
-                <div className="space-y-2 rounded-md border p-3 text-sm">
-                  <p>
-                    <span className="text-muted-foreground">Section: </span>
-                    Class {sectionForm.number} - {sectionForm.section}
-                  </p>
-                  <p>
-                    <span className="text-muted-foreground">Class Teacher: </span>
-                    {sectionForm.classTeacherId ? teacherName(sectionForm.classTeacherId) : 'None'}
-                  </p>
-                  <p>
-                    <span className="text-muted-foreground">Max Students: </span>
-                    {sectionForm.maxStudents || 30}
-                  </p>
-                  <div>
-                    <span className="text-muted-foreground">Subjects: </span>
-                    {subjectRows.filter((r) => r.name.trim() && r.teacherId).length === 0 ? (
-                      <span>None</span>
-                    ) : (
-                      <span>
-                        {subjectRows
-                          .filter((r) => r.name.trim() && r.teacherId)
-                          .map((r) => `${r.name} (${teacherName(r.teacherId)})`)
-                          .join(', ')}
-                      </span>
-                    )}
-                  </div>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SECTION_LETTERS.map((letter) => (
+                        <SelectItem key={letter} value={letter}>
+                          {letter}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
+              </div>
 
-                {sectionFormError && (
-                  <p className="text-sm text-destructive" role="alert">
-                    {sectionFormError}
-                  </p>
+              <div className="space-y-2">
+                <Label>Class Teacher (optional)</Label>
+                <Select
+                  value={sectionForm.classTeacherId || 'none'}
+                  onValueChange={(v) =>
+                    setSectionForm((f) => ({ ...f, classTeacherId: v === 'none' ? '' : v }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a teacher" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None</SelectItem>
+                    {teachersForWing(activeWing).map((t) => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {teachersForWing(activeWing).length === 0 && (
+                  <p className="text-xs text-muted-foreground">No teachers assigned to this wing yet.</p>
                 )}
+              </div>
 
-                <DialogFooter className="gap-2">
-                  <Button type="button" variant="outline" onClick={() => setWizardStep(2)}>
-                    ← Back
-                  </Button>
-                  <Button type="submit" disabled={sectionSubmitting}>
-                    {sectionSubmitting ? 'Creating...' : 'Create Section & Subjects'}
-                  </Button>
-                </DialogFooter>
-              </form>
-            )}
+              <div className="space-y-2">
+                <Label htmlFor="new-max-students">Max Students</Label>
+                <Input
+                  id="new-max-students"
+                  type="number"
+                  min={1}
+                  max={60}
+                  value={sectionForm.maxStudents}
+                  onChange={(e) => setSectionForm((f) => ({ ...f, maxStudents: e.target.value }))}
+                />
+              </div>
+
+              <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                {sectionTemplatePreview.length === 0 ? (
+                  <>
+                    No subjects have been defined for Class {sectionForm.number} yet — add them on the{' '}
+                    <span className="font-medium text-foreground">Subjects</span> page first.
+                  </>
+                ) : (
+                  <>
+                    This section will automatically get:{' '}
+                    <span className="font-medium text-foreground">
+                      {sectionTemplatePreview.map((t) => t.name).join(', ')}
+                    </span>
+                    . Teachers are auto-assigned when the timetable is generated.
+                  </>
+                )}
+              </div>
+
+              {sectionFormError && (
+                <p className="text-sm text-destructive" role="alert">
+                  {sectionFormError}
+                </p>
+              )}
+
+              <DialogFooter>
+                <Button type="submit" disabled={sectionSubmitting}>
+                  {sectionSubmitting ? 'Creating...' : 'Create Section'}
+                </Button>
+              </DialogFooter>
+            </form>
           </DialogContent>
         </Dialog>
       )}
@@ -1360,67 +1106,6 @@ export default function StudentsClassesPage() {
               />
             </div>
 
-            {!editingStudent && (
-              <div className="space-y-2 rounded-md border border-dashed p-3">
-                <p className="text-xs font-medium text-muted-foreground">
-                  Parent account (optional) — leave blank to link one later
-                </p>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="parent-name">Parent Name</Label>
-                    <Input
-                      id="parent-name"
-                      value={studentForm.parentName}
-                      onChange={(e) => setStudentForm((f) => ({ ...f, parentName: e.target.value }))}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="parent-email">Parent Email (auto-generated, editable)</Label>
-                    <Input
-                      id="parent-email"
-                      type="email"
-                      value={studentForm.parentEmail}
-                      onChange={(e) => {
-                        setStudentForm((f) => ({ ...f, parentEmail: e.target.value }));
-                        setStudentAutoTouched((t) => ({ ...t, parentEmail: true }));
-                      }}
-                    />
-                  </div>
-                </div>
-                {studentForm.parentEmail && (
-                  <div className="space-y-2">
-                    <Label htmlFor="parent-password">Parent Password (auto-generated, editable)</Label>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        id="parent-password"
-                        value={studentForm.parentPassword}
-                        onChange={(e) => {
-                          setStudentForm((f) => ({ ...f, parentPassword: e.target.value }));
-                          setStudentAutoTouched((t) => ({ ...t, parentPassword: true }));
-                        }}
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => copyToClipboard(studentForm.parentPassword)}
-                      >
-                        Copy
-                      </Button>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Only used if this email doesn&apos;t already belong to an existing parent account.
-                    </p>
-                  </div>
-                )}
-                <p className="text-xs text-muted-foreground">
-                  If this email already belongs to a parent at this school, the student is linked to
-                  that account (siblings share one login). Otherwise a new parent account is
-                  auto-created with the password above and emailed their credentials.
-                </p>
-              </div>
-            )}
-
             {studentFormError && (
               <p className="text-sm text-destructive" role="alert">
                 {studentFormError}
@@ -1476,17 +1161,6 @@ export default function StudentsClassesPage() {
               </p>
             </div>
 
-            {hasFeature('featureParentPortal') && (
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={bulkCreateParents}
-                  onChange={(e) => { setBulkCreateParents(e.target.checked); setBulkPreview(null); }}
-                />
-                Also create a parent account for each student
-              </label>
-            )}
-
             {bulkError && (
               <p className="text-sm text-destructive" role="alert">
                 {bulkError}
@@ -1508,7 +1182,6 @@ export default function StudentsClassesPage() {
                       <TableHead className="h-8 text-xs">Name</TableHead>
                       <TableHead className="h-8 text-xs">Email</TableHead>
                       <TableHead className="h-8 text-xs">Password</TableHead>
-                      {bulkCreateParents && <TableHead className="h-8 text-xs">Parent</TableHead>}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -1518,11 +1191,6 @@ export default function StudentsClassesPage() {
                         <TableCell className="py-1 text-xs">{row.name}</TableCell>
                         <TableCell className="py-1 text-xs">{row.email}</TableCell>
                         <TableCell className="py-1 text-xs">{row.password}</TableCell>
-                        {bulkCreateParents && (
-                          <TableCell className="py-1 text-xs">
-                            {row.parentEmail} / {row.parentPassword}
-                          </TableCell>
-                        )}
                       </TableRow>
                     ))}
                   </TableBody>
@@ -1535,11 +1203,6 @@ export default function StudentsClassesPage() {
                 <p className="font-medium text-green-600">
                   {bulkResult.created.length} student(s) created successfully.
                 </p>
-                {bulkResult.parents.length > 0 && (
-                  <p className="text-xs text-muted-foreground">
-                    {bulkResult.parents.length} parent account(s) created.
-                  </p>
-                )}
                 {bulkResult.failed.length > 0 && (
                   <div className="mt-2 space-y-1">
                     <p className="font-medium text-destructive">

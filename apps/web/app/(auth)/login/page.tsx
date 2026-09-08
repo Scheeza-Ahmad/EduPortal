@@ -38,7 +38,6 @@ const ROLES: RoleInfo[] = [
   { value: 'school_admin', label: 'School Admin', icon: '🏫', description: 'School operations', loginTitle: 'School Admin Login', color: 'blue' },
   { value: 'teacher', label: 'Teacher', icon: '👨‍🏫', description: 'Classes & activities', loginTitle: 'Teacher Login', color: 'green' },
   { value: 'student', label: 'Student', icon: '🎓', description: 'My learning', loginTitle: 'Student Login', color: 'indigo' },
-  { value: 'parent', label: 'Parent', icon: '👨‍👩‍👧‍👦', description: "Child's progress", loginTitle: 'Parent Login', color: 'orange' },
   { value: 'finance', label: 'Finance', icon: '💰', description: 'Fees & payments', loginTitle: 'Finance Officer Login', color: 'yellow' },
   { value: 'coordinator', label: 'Coordinator', icon: '🎯', description: 'Wing supervision', loginTitle: 'Coordinator Login', color: 'pink' },
 ];

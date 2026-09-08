@@ -2,6 +2,7 @@
 
 import { ReactNode, useEffect, useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
 import { Loader2, Menu, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -144,7 +145,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
       >
         <div className="mb-6 flex items-center justify-between px-2">
           {hasCustomBranding && branding.logoUrl ? (
-            <img src={branding.logoUrl} alt={branding.portalName} className="h-8 w-auto object-contain" />
+            <Image src={branding.logoUrl} alt={branding.portalName ?? ''} width={128} height={32} unoptimized className="h-8 w-auto object-contain" />
           ) : (
             <span className="text-lg font-semibold">{branding.portalName}</span>
           )}

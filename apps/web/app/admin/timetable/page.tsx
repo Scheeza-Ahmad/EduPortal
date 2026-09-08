@@ -44,7 +44,7 @@ function classLabel(c: ClassOption): string {
 interface SubjectOption {
   id: string;
   name: string;
-  teacher: { id: string; name: string };
+  teacher: { id: string; name: string } | null;
 }
 
 interface TimetableSlot {
@@ -75,6 +75,7 @@ interface PreviewSlot {
   startTime: string;
   endTime: string;
   subjectId: string;
+  teacherId: string | null;
 }
 
 interface AutoGenerateResult {
@@ -82,6 +83,7 @@ interface AutoGenerateResult {
   generated: number;
   skipped: number;
   conflicts: { subject: string; reason: string }[];
+  warnings: string[];
   schedule: { day: string; period: number; time: string; subject: string; teacher: string }[];
   teacherLoad: Record<string, number>;
   slots: PreviewSlot[];
@@ -208,7 +210,7 @@ export default function TimetablePage() {
   // so the admin sees the warning (and Save gets disabled) before they even
   // try to submit, not just after a 409 comes back.
   useEffect(() => {
-    const teacherId = subjects.find((s) => s.id === form.subjectId)?.teacher.id;
+    const teacherId = subjects.find((s) => s.id === form.subjectId)?.teacher?.id;
     if (!teacherId || !form.startTime || !form.endTime) {
       setConflictWarning(null);
       return;
@@ -380,7 +382,11 @@ export default function TimetablePage() {
                       </TableCell>
                       <TableCell>{slot.subject.name}</TableCell>
                       <TableCell className="text-muted-foreground">
-                        {slot.subject.teacher.name}
+                        {slot.subject.teacher?.name ?? (
+                          <Badge variant="destructive" className="text-[10px]">
+                            Not Assigned
+                          </Badge>
+                        )}
                       </TableCell>
                       <TableCell>{slot.room ?? '—'}</TableCell>
                       <TableCell className="text-right space-x-2">
@@ -438,7 +444,7 @@ export default function TimetablePage() {
                   ) : (
                     subjects.map((s) => (
                       <SelectItem key={s.id} value={s.id}>
-                        {s.name} ({s.teacher.name})
+                        {s.name} ({s.teacher?.name ?? 'Not Assigned'})
                       </SelectItem>
                     ))
                   )}
@@ -551,6 +557,17 @@ export default function TimetablePage() {
                 )}
               </p>
 
+              {autoGenResult.warnings.length > 0 && (
+                <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 dark:border-red-900 dark:bg-red-950">
+                  <p className="text-xs font-medium text-red-800 dark:text-red-400">Teachers needed:</p>
+                  <ul className="list-disc space-y-1 pl-4 text-sm text-red-700 dark:text-red-400">
+                    {autoGenResult.warnings.map((w, i) => (
+                      <li key={i}>{w}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {autoGenResult.conflicts.length > 0 && (
                 <div>
                   <p className="text-xs font-medium text-muted-foreground">Skipped:</p>
@@ -585,7 +602,15 @@ export default function TimetablePage() {
                             <TableCell className="py-1 text-xs">{s.period}</TableCell>
                             <TableCell className="py-1 text-xs">{s.time}</TableCell>
                             <TableCell className="py-1 text-xs">{s.subject}</TableCell>
-                            <TableCell className="py-1 text-xs">{s.teacher}</TableCell>
+                            <TableCell className="py-1 text-xs">
+                              {s.teacher === 'Not Assigned' ? (
+                                <Badge variant="destructive" className="text-[10px]">
+                                  Not Assigned
+                                </Badge>
+                              ) : (
+                                s.teacher
+                              )}
+                            </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>

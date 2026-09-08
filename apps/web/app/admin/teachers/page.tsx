@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { AxiosError } from 'axios';
+import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -208,13 +209,18 @@ export default function TeachersPage() {
     setPoolError(null);
     setPoolSubmitting(true);
     try {
-      const res = await api.post<{ success: boolean; data: TeacherSubjectPoolEntry }>(
-        `/api/admin/teachers/${poolTarget.id}/subjects`,
-        { subjectName: poolInput.trim() }
-      );
+      const res = await api.post<{
+        success: boolean;
+        data: TeacherSubjectPoolEntry & { autoAssignedCount: number };
+      }>(`/api/admin/teachers/${poolTarget.id}/subjects`, { subjectName: poolInput.trim() });
       setPoolInput('');
       setPoolTarget((t) => (t ? { ...t, subjectPool: [...t.subjectPool, res.data.data] } : t));
       await Promise.all([loadTeachers(), loadAvailability()]);
+      if (res.data.data.autoAssignedCount > 0) {
+        toast.success(
+          `Immediately assigned to ${res.data.data.autoAssignedCount} section(s) that were waiting for a ${res.data.data.subjectName} teacher.`
+        );
+      }
     } catch (err) {
       const axiosErr = err as AxiosError<{ error?: string }>;
       setPoolError(axiosErr.response?.data?.error ?? 'Failed to add subject.');

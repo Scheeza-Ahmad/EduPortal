@@ -380,15 +380,16 @@ export async function syncFeeStructure(req: AuthRequest, res: Response): Promise
     return;
   }
 
-  const studentsInClass = await prisma.studentProfile.findMany({
-    where: { class: { schoolId, number: structure.classNumber } },
-    select: { userId: true },
-  });
-
-  const existingFees = await prisma.studentFee.findMany({
-    where: { feeStructureId: structure.id },
-    select: { studentId: true },
-  });
+  const [studentsInClass, existingFees] = await Promise.all([
+    prisma.studentProfile.findMany({
+      where: { class: { schoolId, number: structure.classNumber } },
+      select: { userId: true },
+    }),
+    prisma.studentFee.findMany({
+      where: { feeStructureId: structure.id },
+      select: { studentId: true },
+    }),
+  ]);
   const alreadyHasFee = new Set(existingFees.map((f) => f.studentId));
   const missingStudents = studentsInClass.filter((s) => !alreadyHasFee.has(s.userId));
 
@@ -667,8 +668,10 @@ export async function getReceipt(req: AuthRequest, res: Response): Promise<void>
     return;
   }
 
-  const settings = await prisma.schoolSettings.findUnique({ where: { schoolId } });
-  const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } });
+  const [settings, school] = await Promise.all([
+    prisma.schoolSettings.findUnique({ where: { schoolId } }),
+    prisma.school.findUnique({ where: { id: schoolId }, select: { name: true } }),
+  ]);
   const profile = payment.studentFee.student.studentProfile;
 
   send(res, 200, {

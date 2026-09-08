@@ -96,14 +96,6 @@ export const FEATURES: Feature[] = [
 
   // Communication
   {
-    key: 'featureParentPortal',
-    label: 'Parent Portal',
-    description: 'Parents can track child progress, attendance, and fees.',
-    icon: '👨‍👩‍👧‍👦',
-    affectsRoles: ['parent'],
-    category: 'Communication',
-  },
-  {
     key: 'featureSms',
     label: 'SMS Notifications',
     description: 'Send SMS alerts for attendance, grades, and announcements.',

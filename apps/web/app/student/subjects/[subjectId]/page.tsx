@@ -186,7 +186,7 @@ export default function StudentSubjectPage() {
             <h1 className="text-xl font-semibold">{subject.name}</h1>
             <p className="text-sm text-muted-foreground">
               {subject.teacher ? subject.teacher.name : 'No teacher assigned'} · {subject.creditHours}{' '}
-              credit hours
+              periods/week
             </p>
           </div>
 

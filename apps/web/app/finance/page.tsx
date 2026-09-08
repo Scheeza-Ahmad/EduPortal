@@ -1,26 +1,29 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { api } from '@/lib/api';
+import { useState } from 'react';
+import useSWR from 'swr';
+import { fetcher } from '@/lib/api';
+import { dynamicChart } from '@/lib/dynamicChart';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ErrorState } from '@/components/shared/ErrorState';
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+
+// Fix 7 — recharts kept out of the initial bundle; loaded client-side only
+// when this dashboard is actually visited.
+const Area = dynamicChart(() => import('recharts').then((m) => m.Area));
+const AreaChart = dynamicChart(() => import('recharts').then((m) => m.AreaChart));
+const Bar = dynamicChart(() => import('recharts').then((m) => m.Bar));
+const BarChart = dynamicChart(() => import('recharts').then((m) => m.BarChart));
+const CartesianGrid = dynamicChart(() => import('recharts').then((m) => m.CartesianGrid));
+const Cell = dynamicChart(() => import('recharts').then((m) => m.Cell));
+const Legend = dynamicChart(() => import('recharts').then((m) => m.Legend));
+const Pie = dynamicChart(() => import('recharts').then((m) => m.Pie));
+const PieChart = dynamicChart(() => import('recharts').then((m) => m.PieChart));
+const ResponsiveContainer = dynamicChart(() => import('recharts').then((m) => m.ResponsiveContainer));
+const Tooltip = dynamicChart(() => import('recharts').then((m) => m.Tooltip));
+const XAxis = dynamicChart(() => import('recharts').then((m) => m.XAxis));
+const YAxis = dynamicChart(() => import('recharts').then((m) => m.YAxis));
 
 interface ClassStat {
   classNumber: number;
@@ -95,56 +98,30 @@ function money(n: number): string {
 
 export default function FinanceDashboardPage() {
   const [monthYear, setMonthYear] = useState(defaultMonthYear());
-  const [stats, setStats] = useState<FinanceStats | null>(null);
-  const [trend, setTrend] = useState<TrendPoint[]>([]);
-  const [activity, setActivity] = useState<ActivityPoint[]>([]);
-  const [overdue, setOverdue] = useState<OverdueStudent[]>([]);
-  const [recentPayments, setRecentPayments] = useState<RecentPayment[]>([]);
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [retryKey, setRetryKey] = useState(0);
+  // Fix 3 — SWR: month-dependent stats re-fetch only when monthYear changes
+  // (it's part of the cache key); the rest are fetched once and cached.
+  const {
+    data: stats,
+    error,
+    isLoading: loading,
+    mutate,
+  } = useSWR<FinanceStats>(monthYear ? `/api/finance/stats?monthYear=${monthYear}` : null, fetcher);
+  const { data: trendData } = useSWR<{ trend: TrendPoint[] }>('/api/finance/stats/trend?months=6', fetcher);
+  const { data: activityData } = useSWR<{ activity: ActivityPoint[] }>(
+    '/api/finance/stats/payment-activity?days=7',
+    fetcher
+  );
+  const { data: overdueData } = useSWR<{ overdue: OverdueStudent[] }>('/api/finance/stats/overdue', fetcher);
+  const { data: recentPaymentsData } = useSWR<{ payments: RecentPayment[] }>(
+    '/api/finance/stats/recent-payments?limit=10',
+    fetcher
+  );
 
-  // Month-dependent (KPI cards + donut).
-  useEffect(() => {
-    if (!monthYear) return;
-    setLoading(true);
-    setError(null);
-    api
-      .get<{ success: boolean; data: FinanceStats }>('/api/finance/stats', { params: { monthYear } })
-      .then((res) => setStats(res.data.data))
-      .catch(() => setError('Failed to load finance stats.'))
-      .finally(() => setLoading(false));
-  }, [monthYear, retryKey]);
-
-  // Independent of the selected month — fetched once.
-  useEffect(() => {
-    api
-      .get<{ success: boolean; data: { trend: TrendPoint[] } }>('/api/finance/stats/trend', {
-        params: { months: 6 },
-      })
-      .then((res) => setTrend(res.data.data.trend))
-      .catch(() => {});
-
-    api
-      .get<{ success: boolean; data: { activity: ActivityPoint[] } }>('/api/finance/stats/payment-activity', {
-        params: { days: 7 },
-      })
-      .then((res) => setActivity(res.data.data.activity))
-      .catch(() => {});
-
-    api
-      .get<{ success: boolean; data: { overdue: OverdueStudent[] } }>('/api/finance/stats/overdue')
-      .then((res) => setOverdue(res.data.data.overdue))
-      .catch(() => {});
-
-    api
-      .get<{ success: boolean; data: { payments: RecentPayment[] } }>('/api/finance/stats/recent-payments', {
-        params: { limit: 10 },
-      })
-      .then((res) => setRecentPayments(res.data.data.payments))
-      .catch(() => {});
-  }, []);
+  const trend = trendData?.trend ?? [];
+  const activity = activityData?.activity ?? [];
+  const overdue = overdueData?.overdue ?? [];
+  const recentPayments = recentPaymentsData?.payments ?? [];
 
   const donutData = stats
     ? [
@@ -174,7 +151,7 @@ export default function FinanceDashboardPage() {
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading...</p>
       ) : error ? (
-        <ErrorState message={error} onRetry={() => setRetryKey((k) => k + 1)} />
+        <ErrorState message="Failed to load finance stats." onRetry={() => mutate()} />
       ) : !stats ? (
         <p className="text-sm text-muted-foreground">No data for this month yet.</p>
       ) : (
@@ -209,7 +186,7 @@ export default function FinanceDashboardPage() {
                     <AreaChart data={trend}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
                       <XAxis dataKey="monthLabel" tick={{ fontSize: 12 }} />
-                      <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
+                      <YAxis tick={{ fontSize: 12 }} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`} />
                       <Tooltip formatter={(v: number) => money(v)} />
                       <Legend />
                       <Area
@@ -285,7 +262,7 @@ export default function FinanceDashboardPage() {
                     <BarChart data={classChartData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
                       <XAxis dataKey="classLabel" tick={{ fontSize: 12 }} />
-                      <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
+                      <YAxis tick={{ fontSize: 12 }} tickFormatter={(v: number) => `${(v / 1000).toFixed(0)}k`} />
                       <Tooltip formatter={(v: number) => money(v)} />
                       <Legend />
                       <Bar dataKey="Collected" fill="#22c55e" radius={[4, 4, 0, 0]} />

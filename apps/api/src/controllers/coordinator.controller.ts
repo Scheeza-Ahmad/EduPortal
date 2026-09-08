@@ -302,10 +302,11 @@ export async function getDashboard(req: AuthRequest, res: Response): Promise<voi
       where: { activityId: { in: activityIds } },
       select: { activityId: true },
     });
-    const classSizeCache = new Map<string, number>();
-    for (const cId of new Set(activitiesDue.map((a) => a.subject.classId))) {
-      classSizeCache.set(cId, await prisma.studentProfile.count({ where: { classId: cId } }));
-    }
+    const distinctClassIds = [...new Set(activitiesDue.map((a) => a.subject.classId))];
+    const classSizes = await Promise.all(
+      distinctClassIds.map((cId) => prisma.studentProfile.count({ where: { classId: cId } }))
+    );
+    const classSizeCache = new Map(distinctClassIds.map((cId, i) => [cId, classSizes[i]]));
     const submittedCount = submissions.length;
     const expectedCount = activitiesDue.reduce(
       (sum, a) => sum + (classSizeCache.get(a.subject.classId) ?? 0),
@@ -314,10 +315,13 @@ export async function getDashboard(req: AuthRequest, res: Response): Promise<voi
     submissionRate = expectedCount > 0 ? Math.round((submittedCount / expectedCount) * 100) : 0;
   }
 
+  // One query covers both the overall rate and the per-class breakdown below
+  // — these used to be two nearly-identical attendance queries over the same
+  // date range and classIds.
   const attendanceRecords = classIds.length
     ? await prisma.attendance.findMany({
         where: { subject: { classId: { in: classIds } }, date: { gte: start, lt: end } },
-        select: { status: true },
+        select: { status: true, subject: { select: { classId: true } } },
       })
     : [];
   const attendanceRate =
@@ -340,12 +344,8 @@ export async function getDashboard(req: AuthRequest, res: Response): Promise<voi
   const classAttendanceByClass = new Map<string, number[]>();
   for (const c of classes) classAttendanceByClass.set(c.id, []);
   if (classIds.length) {
-    const perClassAttendance = await prisma.attendance.findMany({
-      where: { subject: { classId: { in: classIds } }, date: { gte: start, lt: end } },
-      select: { status: true, subject: { select: { classId: true } } },
-    });
     const bucket = new Map<string, { present: number; total: number }>();
-    for (const a of perClassAttendance) {
+    for (const a of attendanceRecords) {
       const entry = bucket.get(a.subject.classId) ?? { present: 0, total: 0 };
       entry.total += 1;
       if (a.status === 'present') entry.present += 1;

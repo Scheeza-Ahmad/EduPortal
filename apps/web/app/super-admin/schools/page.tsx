@@ -49,7 +49,6 @@ interface School {
   adminId: string | null;
   admin: { id: string; name: string; email: string } | null;
   isActive: boolean;
-  featureParentPortal: boolean;
   featureAi: boolean;
   featureSms: boolean;
   featureUrdu: boolean;
@@ -59,7 +58,6 @@ interface FormState {
   name: string;
   city: string;
   phone: string;
-  featureParentPortal: boolean;
   featureAi: boolean;
   featureSms: boolean;
   featureUrdu: boolean;
@@ -69,7 +67,6 @@ const EMPTY_FORM: FormState = {
   name: '',
   city: '',
   phone: '',
-  featureParentPortal: false,
   featureAi: false,
   featureSms: false,
   featureUrdu: false,
@@ -158,7 +155,6 @@ export default function SchoolsPage() {
       name: school.name,
       city: school.city,
       phone: school.phone ?? '',
-      featureParentPortal: school.featureParentPortal,
       featureAi: school.featureAi,
       featureSms: school.featureSms,
       featureUrdu: school.featureUrdu,
@@ -178,7 +174,6 @@ export default function SchoolsPage() {
           name: form.name,
           city: form.city,
           phone: form.phone || undefined,
-          featureParentPortal: form.featureParentPortal,
           featureAi: form.featureAi,
           featureSms: form.featureSms,
           featureUrdu: form.featureUrdu,
@@ -349,7 +344,6 @@ export default function SchoolsPage() {
 
   function activeFeatures(school: School): string[] {
     const features: string[] = [];
-    if (school.featureParentPortal) features.push('Parent Portal');
     if (school.featureAi) features.push('AI');
     if (school.featureSms) features.push('SMS');
     if (school.featureUrdu) features.push('Urdu');
@@ -499,19 +493,6 @@ export default function SchoolsPage() {
             {editingSchool && (
               <div className="space-y-3 border-t pt-4">
                 <p className="text-sm font-medium">Features</p>
-
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="feature-parent-portal" className="font-normal">
-                    Parent Portal
-                  </Label>
-                  <Switch
-                    id="feature-parent-portal"
-                    checked={form.featureParentPortal}
-                    onCheckedChange={(checked) =>
-                      setForm((f) => ({ ...f, featureParentPortal: checked }))
-                    }
-                  />
-                </div>
 
                 <div className="flex items-center justify-between">
                   <Label htmlFor="feature-ai" className="font-normal">
